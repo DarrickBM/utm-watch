@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 # OUT_DIR lets a release build go somewhere other than the copy you run day to day.
 APP="${OUT_DIR:-build}/UTMWatch.app"
 BUNDLE_ID="com.darrick.utmwatch"
-VERSION="${VERSION:-0.3.0}"
+VERSION="${VERSION:-0.4.0}"
 
 swift build -c release --product UTMWatchApp
 swift build -c release --product utmwatch-mcp

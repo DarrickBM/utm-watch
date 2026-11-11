@@ -17,6 +17,8 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 
 Hover the menu bar item for a quick look. Click it for the full window.
 
+To give a VM your own name, such as a customer's name, hover its name in the full window and click the pencil. The name is used throughout UTM Watch; UTM itself is not changed. Save an empty name to go back to the UTM name.
+
 ![UTM Watch detail window, live](docs/images/detail-live.png)
 
 UTM Watch is an independent project. It is not affiliated with or endorsed by the UTM project. Licensed under the MIT License; see `LICENSE`.
