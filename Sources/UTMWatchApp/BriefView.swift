@@ -179,9 +179,18 @@ private struct VMBriefRow: View {
                 Meter(label: "CPU", value: Format.cores(vm.cpuCores, vm.cpuAllocated),
                       fraction: fraction(vm.cpuCores, vm.cpuAllocated.map { Double($0) }),
                       color: color, explanation: Explain.cpu(vm), active: $explanation)
-                Meter(label: "Memory", value: Format.memoryPair(vm.memoryBytes, vm.memoryAllocatedBytes),
-                      fraction: fraction(vm.memoryBytes.map { Double($0) }, vm.memoryAllocatedBytes.map { Double($0) }),
-                      color: color, explanation: nil, active: $explanation)
+                // Same reading as the detail window's Memory track: what is in RAM now against what the VM holds.
+                // The solid part of the bar is in RAM; the paler part is held but compressed or swapped by the Mac.
+                if let inRAM = vm.residentBytes, let held = vm.memoryBytes {
+                    Meter(label: "In RAM / held", value: "\(String(format: "%.1f", Double(inRAM) / 1_073_741_824)) / \(Format.memory(held))",
+                          fraction: fraction(Double(inRAM), vm.memoryAllocatedBytes.map { Double($0) } ?? Double(held)),
+                          backFraction: fraction(Double(held), vm.memoryAllocatedBytes.map { Double($0) } ?? Double(held)),
+                          color: color, explanation: nil, active: $explanation)
+                } else {
+                    Meter(label: "Memory", value: Format.memoryPair(vm.memoryBytes, vm.memoryAllocatedBytes),
+                          fraction: fraction(vm.memoryBytes.map { Double($0) }, vm.memoryAllocatedBytes.map { Double($0) }),
+                          color: color, explanation: nil, active: $explanation)
+                }
             }
         }
     }
@@ -196,6 +205,8 @@ private struct Meter: View {
     let label: String
     let value: String
     let fraction: Double?
+    /// A paler fill drawn behind the main one, for a larger amount the main one is part of.
+    var backFraction: Double? = nil
     let color: Color
     let explanation: String?
     @Binding var active: String?
@@ -206,6 +217,7 @@ private struct Meter: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.10))
+                    if let backFraction { Capsule().fill(color.opacity(0.3)).frame(width: geo.size.width * backFraction) }
                     Capsule().fill(explanation == nil ? color : Color.orange)
                         .frame(width: geo.size.width * (fraction ?? 0))
                 }
