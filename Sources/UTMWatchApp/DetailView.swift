@@ -168,7 +168,8 @@ struct DetailView: View {
     }
 
     private func stat(_ label: String, _ value: String, _ sub: String, _ warning: String?, okMark: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        let meaning = Self.meanings[label] ?? ""
+        return VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if warning != nil {
@@ -182,8 +183,18 @@ struct DetailView: View {
         }
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help(warning ?? "")
+        .contentShape(Rectangle())
+        .help(warning.map { meaning.isEmpty ? $0 : "\($0)\n\n\(meaning)" } ?? meaning)
     }
+
+    /// What each host figure means, shown when hovering it.
+    private static let meanings: [String: String] = [
+        "Memory pressure": "macOS's own verdict on whether this Mac has enough memory. Normal: enough is free. Warning: it is compressing memory and swapping to disk to keep up, so things may feel slow. Critical: it is nearly out and stalls are likely.",
+        "Swap used": "How much of this Mac's swap space on disk is in use. Memory that does not fit in RAM is moved there, and reading it back is much slower than RAM.",
+        "Allocatable memory": "How much memory you could still give to another VM: this Mac's RAM, minus what macOS and your apps use, minus the memory limits of the VMs already running. \"Free now\" is what is unused at this moment.",
+        "Cores allocated": "The CPU cores given to the running VMs, added up, against the cores this Mac has. Above the Mac's count, VMs compete for processor time when they are all busy.",
+        "Network link": "How this Mac is connected to your network. For Wi-Fi, the signal strength in dBm (closer to 0 is stronger; below about -75 is weak) and the link speed.",
+    ]
 
     // MARK: VM chips and the key to the shaded periods
 
@@ -199,12 +210,13 @@ struct DetailView: View {
             }
             HStack(spacing: 12) {
                 Text("Shaded")
-                swatch(TracksView.pressureTint.opacity(0.45), "Memory pressure")
                 swatch(TracksView.linkTint(scheme).opacity(0.38), "Weak Wi-Fi")
+                    .help("Times when the Wi-Fi signal was weak or the Mac had no network. Not shaded when it lasted the whole time frame.")
                 swatch(Color.primary.opacity(0.14), "No data")
+                    .help("Times when nothing was recorded: the Mac was asleep, or UTM Watch was not running.")
             }
             .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize()
-            .help("These periods are shaded through every track, so you can see what else changed while they lasted")
+            .help("These periods are shaded through every track, so you can see what else changed while they lasted.")
         }
         .frame(height: 28)
     }
