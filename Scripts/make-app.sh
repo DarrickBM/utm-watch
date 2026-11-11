@@ -5,9 +5,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP="build/UTMWatch.app"
+# OUT_DIR lets a release build go somewhere other than the copy you run day to day.
+APP="${OUT_DIR:-build}/UTMWatch.app"
 BUNDLE_ID="com.darrick.utmwatch"
-VERSION="0.1.0"
+VERSION="${VERSION:-0.1.0}"
 
 swift build -c release --product UTMWatchApp
 swift build -c release --product utmwatch-mcp

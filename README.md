@@ -10,6 +10,44 @@ UTM Watch is an independent project. It is not affiliated with or endorsed by th
 
 Licensed under the MIT License; see `LICENSE`.
 
+## Install
+
+Requires an Apple silicon Mac. Built and tested on macOS 26; it is set to run on macOS 14 or later, but older versions are untested. Download the files from the [latest release](https://github.com/DarrickBM/utm-watch/releases/latest).
+
+The downloads are not notarized by Apple (that needs a paid Developer ID), so macOS blocks them until you clear the download flag once. The commands below do that.
+
+**Menu bar app**
+
+Unzip `UTMWatch-<version>-macos-arm64.zip`, move `UTMWatch.app` to `/Applications`, then:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/UTMWatch.app
+```
+
+```bash
+open /Applications/UTMWatch.app
+```
+
+On first launch macOS asks for three permissions: access to data from other apps (UTM's VM files), control of UTM, and the local network (pings to your router and VMs). The app keeps working if you deny one, with less detail.
+
+**Terminal tool**
+
+```bash
+tar -xzf utmwatch-*-macos-arm64.tar.gz && xattr -d com.apple.quarantine utmwatch-*/utmwatch
+```
+
+```bash
+./utmwatch-*/utmwatch
+```
+
+**Let an AI agent read the history (optional)**
+
+```bash
+claude mcp add utm-watch -- /Applications/UTMWatch.app/Contents/MacOS/utmwatch-mcp
+```
+
+To build from source instead, see "Build and run" and "Menu bar app" below.
+
 ## Terminal tool
 A terminal tool that lists every running virtual machine on this Mac **by its UTM name** with live CPU, memory and network usage, and tells you how much memory and how many cores are still allocatable. The collection layer (`UTMWatchCore`) is a library shared with the menu bar app.
 
@@ -102,7 +140,7 @@ On the host, bytes the `vmenetN` interface **sends** are bytes going **into** th
 
 ## Menu bar app
 
-`Scripts/make-app.sh` builds and signs `build/UTMWatch.app`: a menu bar item with a hover brief, a detail window with trend tracks and recorded history, and Settings. Design notes are in `docs/DESIGN-menu-bar-app.md`.
+`Scripts/make-app.sh` builds and signs `build/UTMWatch.app` (with your Apple Development certificate if you have one, otherwise ad hoc); `Scripts/make-release.sh` produces the downloadable archives in `dist/`. The app is a menu bar item with a hover brief, a detail window with trend tracks and recorded history, and Settings. Design notes are in `docs/DESIGN-menu-bar-app.md`.
 
 ```bash
 Scripts/make-app.sh
