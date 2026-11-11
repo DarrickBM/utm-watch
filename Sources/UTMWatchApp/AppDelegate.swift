@@ -7,6 +7,7 @@ import UTMWatchStore
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let settings = AppSettings()
     lazy var model = AppModel(settings: settings)
+    lazy var updater = Updater(settings: settings)
     private var sampler: Sampler!
     private var statusItem: StatusItemController!
     private var detailWindow: NSWindow?
@@ -22,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         FileLog.shared.log("launch pid \(ProcessInfo.processInfo.processIdentifier) args \(CommandLine.arguments.dropFirst().joined(separator: " "))")
 
         let debug = CommandLine.arguments.contains("--debug")
-        statusItem = StatusItemController(model: model, settings: settings, debug: debug)
+        statusItem = StatusItemController(model: model, settings: settings, updater: updater, debug: debug)
         statusItem.onOpenDetails = { [weak self] in self?.showDetails() }
         statusItem.onOpenSettings = { [weak self] in self?.showSettings() }
         model.attachStore()
@@ -47,7 +48,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.model.record([HistoryEvent(ts: Date().msSince1970, kind: "wake", vmKey: nil, label: "Mac woke")])
         }
+        // Debug aid: `--dark` or `--light` forces the appearance, so both can be checked without changing the system setting.
+        if CommandLine.arguments.contains("--dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+        if CommandLine.arguments.contains("--light") { NSApp.appearance = NSAppearance(named: .aqua) }
         runDebugSnapshotIfRequested()
+        runDebugViewSnapshots()
+        updater.start()
+        // Debug aid: `--update-now` installs a newer release without a click, so the update path can be tested.
+        if CommandLine.arguments.contains("--update-now") {
+            updater.check { [weak self] result in if case .available = result { self?.updater.install() } }
+        }
         // Starts sampling now and re-arms the timer whenever the interval changes in Settings.
         settings.$sampleInterval.removeDuplicates().sink { [weak self] seconds in
             self?.sampler.start(interval: Double(seconds))
@@ -72,6 +82,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             FileLog.shared.log("snapshot written to \(path)")
+        }
+    }
+
+    /// Debug aid: `--snapshot-brief <png>` and `--snapshot-settings <png>` write pictures of the hover brief and
+    /// the Settings window after `--snapshot-delay` seconds, without the pointer having to be anywhere.
+    private var snapshotWindows: [NSWindow] = []
+    private func runDebugViewSnapshots() {
+        let args = CommandLine.arguments
+        func path(_ flag: String) -> String? { args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+        let delay = path("--snapshot-delay").flatMap(Double.init) ?? 8
+        func capture<V: View>(_ view: V, to path: String) {
+            let host = NSHostingView(rootView: view)
+            let w = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
+            w.contentView = host
+            w.setFrameOrigin(NSPoint(x: -20000, y: -20000)) // rendered, but off every screen
+            w.orderFrontRegardless()
+            snapshotWindows.append(w)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                w.setContentSize(host.fittingSize)
+                guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                FileLog.shared.log("snapshot written to \(path)")
+            }
+        }
+        if let p = path("--snapshot-brief") {
+            capture(BriefView(model: model, settings: settings, updater: updater, showsHint: true)
+                .background(Color(nsColor: .windowBackgroundColor)), to: p)
+        }
+        if let p = path("--snapshot-settings") {
+            capture(SettingsView(settings: settings, model: model, onClearData: {}), to: p)
         }
     }
 

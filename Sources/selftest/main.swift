@@ -324,5 +324,25 @@ do {
     check(VMName.clean("客户 👨‍👩‍👧 甲") == "客户 👨‍👩‍👧 甲", "non-Latin names and emoji survive")
 }
 
+do {
+    check(AppVersion.isNewer("0.10.0", than: "0.9.3"), "versions compare number by number")
+    check(!AppVersion.isNewer("0.4.0", than: "0.4.0") && !AppVersion.isNewer("0.3.9", than: "0.4"), "same or older is not newer")
+    check(AppVersion.isNewer("0.4.1", than: "0.4"), "a missing part counts as zero")
+    check(!AppVersion.isNewer("dev", than: "0.4.0") && !AppVersion.isNewer("0.5.0", than: "dev"), "an unreadable version is never newer")
+    let json = """
+    {"tag_name":"v0.5.0","assets":[
+      {"name":"SHA256SUMS.txt","browser_download_url":"https://example.com/SHA256SUMS.txt"},
+      {"name":"UTMWatch-0.5.0-macos-arm64.dmg","browser_download_url":"https://example.com/a.dmg"},
+      {"name":"UTMWatch-0.5.0-macos-arm64.zip","browser_download_url":"https://example.com/UTMWatch-0.5.0-macos-arm64.zip"}]}
+    """
+    let r = ReleaseInfo.parse(Data(json.utf8))
+    check(r?.version == "0.5.0" && r?.appZip.lastPathComponent == "UTMWatch-0.5.0-macos-arm64.zip", "release parsed: version and app zip")
+    check(ReleaseInfo.parse(Data(#"{"tag_name":"v0.5.0","assets":[]}"#.utf8)) == nil, "a release without the app zip is ignored")
+    check(ReleaseInfo.parse(Data(json.replacingOccurrences(of: "https://example.com/UTM", with: "http://example.com/UTM").utf8)) == nil, "a download that is not https is ignored")
+    let sums = String(repeating: "a", count: 64) + "  UTMWatch-0.5.0-macos-arm64.dmg\n" + String(repeating: "B", count: 64) + "  UTMWatch-0.5.0-macos-arm64.zip\n"
+    check(ReleaseInfo.checksum(for: "UTMWatch-0.5.0-macos-arm64.zip", in: sums) == String(repeating: "b", count: 64), "checksum found by file name")
+    check(ReleaseInfo.checksum(for: "other.zip", in: sums) == nil, "no checksum for an unlisted file")
+}
+
 print("\(checks - failures)/\(checks) checks passed")
 exit(failures == 0 ? 0 : 1)

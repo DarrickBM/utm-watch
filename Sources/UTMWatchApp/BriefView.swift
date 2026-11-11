@@ -23,6 +23,7 @@ private struct ExplainFramesKey: PreferenceKey {
 struct BriefView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var settings: AppSettings
+    @ObservedObject var updater: Updater
     var showsHint: Bool
     @ObservedObject var pointer = BriefPointer()
     /// Called when the content height may have changed (an explanation appeared or went away).
@@ -43,10 +44,37 @@ struct BriefView: View {
         return frames.first { $0.rect.insetBy(dx: 0, dy: -3).contains(point) }?.text
     }
 
+    /// Beside the title: a small button while a newer version is waiting, a note while it installs.
+    @ViewBuilder private var updateControl: some View {
+        switch updater.state {
+        case .idle:
+            EmptyView()
+        case .available(let version):
+            Button { updater.install() } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.down").font(.system(size: 9, weight: .bold))
+                    Text("Update to \(version)").font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.leading, 6).padding(.trailing, 8).frame(height: 20)
+                .background(Capsule().fill(Color.blue))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Update to version \(version). Downloads it and restarts UTM Watch.")
+        case .updating(let version):
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text("Updating to \(version)…").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("UTM Watch").font(.system(size: 13, weight: .semibold))
+                updateControl
                 Spacer()
                 Circle().fill(Color.green).frame(width: 7, height: 7)
                 Text("Live, every \(Int(model.snapshot?.intervalSeconds ?? 2)) s").font(.system(size: 11)).foregroundStyle(.secondary)

@@ -11,6 +11,8 @@ final class StatusItemController: NSObject {
 
     private let model: AppModel
     private let settings: AppSettings
+    private let updater: Updater
+    private var updateCancellable: AnyCancellable?
     private let debug: Bool
     private let item: NSStatusItem
     private var cancellable: AnyCancellable?
@@ -25,9 +27,10 @@ final class StatusItemController: NSObject {
     private let briefPointer = BriefPointer()
     private var lastLoggedFrame: NSRect = .zero
 
-    init(model: AppModel, settings: AppSettings, debug: Bool) {
+    init(model: AppModel, settings: AppSettings, updater: Updater, debug: Bool) {
         self.model = model
         self.settings = settings
+        self.updater = updater
         self.debug = debug
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
@@ -36,7 +39,7 @@ final class StatusItemController: NSObject {
         button.image = NSImage(systemSymbolName: "macwindow.on.rectangle", accessibilityDescription: "UTM Watch")
         button.imagePosition = .imageLeading
         button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        button.title = model.title
+        applyTitle()
         button.target = self
         button.action = #selector(clicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -45,8 +48,7 @@ final class StatusItemController: NSObject {
 
         cancellable = model.$snapshot.receive(on: RunLoop.main).sink { [weak self] _ in
             guard let self, let button = self.item.button else { return }
-            let title = self.model.title
-            if button.title != title { button.title = title } // touch AppKit only when the text changes
+            self.applyTitle()
             let warn = self.model.hasWarning
             if warn != self.showingWarning {
                 self.showingWarning = warn
@@ -59,6 +61,39 @@ final class StatusItemController: NSObject {
                 FileLog.shared.log("status item frame \(w.frame) screen \(w.screen?.frame ?? .zero) visible \(w.isVisible) occlusion \(w.occlusionState.contains(.visible))")
             }
         }
+
+        updateCancellable = updater.$state.receive(on: RunLoop.main).sink { [weak self] _ in
+            guard let self else { return }
+            self.shownTitle = nil
+            self.applyTitle()
+            if self.panel != nil { DispatchQueue.main.async { self.resizePanel() } }
+        }
+    }
+
+    private var shownTitle: String?
+
+    /// The live text, followed by a blue arrow while a newer version is waiting. Touches AppKit only when the text changes.
+    private func applyTitle() {
+        guard let button = item.button else { return }
+        let title = model.title
+        guard title != shownTitle else { return }
+        shownTitle = title
+        // A template image takes the menu bar's own text colour, so it stays readable on any wallpaper;
+        // whole-point bounds keep it sharp.
+        guard updater.state != .idle,
+              let arrow = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "Update available")?
+                .withSymbolConfiguration(.init(pointSize: 13, weight: .semibold)) else {
+            button.attributedTitle = NSAttributedString(string: title, attributes: [.font: button.font as Any])
+            button.title = title
+            return
+        }
+        arrow.isTemplate = true
+        let text = NSMutableAttributedString(string: title + " ", attributes: [.font: button.font as Any])
+        let attachment = NSTextAttachment()
+        attachment.image = arrow
+        attachment.bounds = NSRect(x: 0, y: -3, width: ceil(arrow.size.width), height: ceil(arrow.size.height))
+        text.append(NSAttributedString(attachment: attachment))
+        button.attributedTitle = text
     }
 
     // MARK: Clicks
@@ -77,8 +112,18 @@ final class StatusItemController: NSObject {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        if case .available(let version) = updater.state {
+            menu.addItem(withTitle: "Update to \(version)", action: #selector(installUpdate), keyEquivalent: "").target = self
+            menu.addItem(.separator())
+        } else if case .updating(let version) = updater.state {
+            menu.addItem(withTitle: "Updating to \(version)…", action: nil, keyEquivalent: "")
+            menu.addItem(.separator())
+        }
         menu.addItem(withTitle: "Open UTM Watch", action: #selector(openDetails), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
+        if updater.currentVersion != nil {
+            menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
+        }
         if debug {
             menu.addItem(.separator())
             menu.addItem(withTitle: "Send test notification", action: #selector(testNotification), keyEquivalent: "").target = self
@@ -89,6 +134,8 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func openDetails() { onOpenDetails?() }
+    @objc private func installUpdate() { updater.install() }
+    @objc private func checkForUpdates() { updater.checkManually() }
     @objc private func openSettings() { onOpenSettings?() }
 
     @objc private func testNotification() {
@@ -154,7 +201,7 @@ final class StatusItemController: NSObject {
 
     private func openPanel() {
         guard panel == nil, let buttonWindow = item.button?.window else { return }
-        let host = NSHostingView(rootView: BriefView(model: model, settings: settings, showsHint: true, pointer: briefPointer, onLayoutChange: { [weak self] in
+        let host = FirstClickHostingView(rootView: BriefView(model: model, settings: settings, updater: updater, showsHint: true, pointer: briefPointer, onLayoutChange: { [weak self] in
             DispatchQueue.main.async { self?.resizePanel() }
         }))
         let size = host.fittingSize
@@ -199,4 +246,9 @@ final class StatusItemController: NSObject {
         briefPointer.point = nil
         FileLog.shared.log("hover: brief hidden")
     }
+}
+
+/// The brief belongs to an app that is rarely frontmost; its Update button must work on the first click.
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

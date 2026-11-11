@@ -14,12 +14,13 @@ final class AppSettings: ObservableObject {
     @Published var captureProcesses: Bool { didSet { defaults.set(captureProcesses, forKey: "captureProcesses") } }
     /// Names the user gave VMs in the detail window, by VM key. A VM without an entry shows its UTM name.
     @Published var vmAliases: [String: String] { didSet { defaults.set(vmAliases, forKey: "vmAliases") } }
+    @Published var checkForUpdates: Bool { didSet { defaults.set(checkForUpdates, forKey: "checkForUpdates") } }
     @Published var launchAtLogin: Bool
     @Published var launchAtLoginError: String?
 
     init() {
         defaults.register(defaults: ["sampleInterval": 2, "rateUnits": RateUnits.bytes.rawValue, "retentionDays": 7,
-                                     "allowAgents": true, "captureProcesses": true])
+                                     "allowAgents": true, "captureProcesses": true, "checkForUpdates": true])
         let interval = defaults.integer(forKey: "sampleInterval")
         sampleInterval = [1, 2, 5].contains(interval) ? interval : 2
         rateUnits = RateUnits(rawValue: defaults.string(forKey: "rateUnits") ?? "") ?? .bytes
@@ -28,6 +29,7 @@ final class AppSettings: ObservableObject {
         allowAgents = defaults.bool(forKey: "allowAgents")
         captureProcesses = defaults.bool(forKey: "captureProcesses")
         vmAliases = defaults.dictionary(forKey: "vmAliases") as? [String: String] ?? [:]
+        checkForUpdates = defaults.bool(forKey: "checkForUpdates")
         launchAtLogin = SMAppService.mainApp.status == .enabled
         // Written explicitly so the helper, a separate process, sees the value even before it is ever toggled.
         defaults.set(allowAgents, forKey: "allowAgents")

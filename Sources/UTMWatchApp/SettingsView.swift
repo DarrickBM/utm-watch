@@ -37,6 +37,10 @@ struct SettingsView: View {
                     Text("Launch at login")
                     Text(settings.launchAtLoginError ?? "Needed to record history while you are not watching")
                 }
+                Toggle(isOn: $settings.checkForUpdates) {
+                    Text("Check for updates automatically")
+                    Text("Once a day, from GitHub. Nothing about this Mac or its VMs is sent.")
+                }
                 Picker("Sample every", selection: $settings.sampleInterval) {
                     Text("1 s").tag(1); Text("2 s").tag(2); Text("5 s").tag(5)
                 }.pickerStyle(.segmented)
