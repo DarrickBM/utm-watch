@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private var detail: DetailModel!
     private var pruneTimer: Timer?
+    private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let logDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs")
@@ -99,6 +100,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             w.center()
             w.setFrameAutosaveName("UTMWatchDetail")
             detailWindow = w
+            // Arrow keys step the pinned moment and Esc unpins it, unless a control (the date field, a button) has the keys.
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let window = self.detailWindow, event.window === window,
+                      event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
+                if let responder = window.firstResponder, responder is NSText || responder is NSControl { return event }
+                let many = event.modifierFlags.contains(.shift)
+                switch event.keyCode {
+                case 123: self.detail.stepPin(samples: many ? -10 : -1); return nil
+                case 124: self.detail.stepPin(samples: many ? 10 : 1); return nil
+                case 53 where self.detail.pin != nil: self.detail.pin = nil; return nil
+                default: return event
+                }
+            }
         }
         detail.isActive = true
         NSApp.activate(ignoringOtherApps: true)

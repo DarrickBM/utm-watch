@@ -1,5 +1,6 @@
 import SwiftUI
 import UTMWatchCore
+import UTMWatchStore
 
 /// Pointer position inside the brief, in the brief's own coordinates (origin top-left).
 /// The hover panel belongs to an inactive app, where SwiftUI's own hover tracking is not dependable,
@@ -29,6 +30,13 @@ struct BriefView: View {
 
     @State private var explanation: String?
     @State private var frames: [ExplainFrame] = []
+    @Environment(\.colorScheme) private var scheme
+
+    /// The latest ping to a VM, if one came back in the last 25 seconds.
+    private static func ping(_ points: [ProbePoint]?, at t: Int64) -> String? {
+        guard let p = Readout.nearest(points ?? [], t: t, tolerance: 25_000, time: { $0.t }) else { return nil }
+        return p.rtt.map(Readout.ms) ?? "no reply"
+    }
 
     private func explanation(at point: CGPoint?) -> String? {
         guard let point else { return nil }
@@ -50,10 +58,13 @@ struct BriefView: View {
                     Text("No VM running").foregroundStyle(.secondary)
                 }
                 ForEach(vms, id: \.id) { vm in
-                    VMBriefRow(vm: vm, units: settings.rateUnits, explanation: $explanation)
-                    Divider()
+                    VMBriefRow(vm: vm, units: settings.rateUnits,
+                               color: SeriesPalette.color(index: model.ring.order.firstIndex(of: vm.id) ?? 0, scheme: scheme),
+                               ping: Self.ping(model.ring.probes[ProbeTarget.vm(vm.id)], at: snap.timestamp.msSince1970),
+                               explanation: $explanation)
                 }
-                HostBrief(host: snap.host, explanation: $explanation)
+                Divider()
+                HostBrief(host: snap.host, link: model.link, explanation: $explanation)
                 ForEach(snap.notices, id: \.self) { note in
                     Text(note).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
@@ -63,7 +74,7 @@ struct BriefView: View {
 
             // The explanation area is reserved at the height of the longest explanation that could show,
             // so the panel keeps one size whether or not a value is being hovered.
-            let possible = model.snapshot.map(Self.explanations) ?? []
+            let possible = (model.snapshot.map(Self.explanations) ?? []) + [Explain.link(model.link)].compactMap { $0 }
             if !possible.isEmpty {
                 ZStack(alignment: .topLeading) {
                     ForEach(possible, id: \.self) { callout($0).hidden() }
@@ -107,8 +118,8 @@ struct BriefView: View {
     /// Every explanation that hovering could currently bring up.
     private static func explanations(_ s: Snapshot) -> [String] {
         var out = s.rows.filter { $0.pid != nil }.compactMap { Explain.cpu($0) }
-        out += [Explain.allocatable(s.host), Explain.cores(s.host), Explain.swap(s.host), Explain.pressure(s.host)].compactMap { $0 }
-        return out
+        out += [Explain.pressure(s.host), Explain.swap(s.host), Explain.allocatable(s.host), Explain.cores(s.host)].compactMap { $0 }
+        return out // the link explanation is added by the caller, which holds the link
     }
 }
 
@@ -149,23 +160,28 @@ private struct ValueLine: View {
 private struct VMBriefRow: View {
     let vm: VMRow
     let units: RateUnits
+    /// The color this VM's lines have in the detail window.
+    let color: Color
+    let ping: String?
     @Binding var explanation: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                RoundedRectangle(cornerRadius: 3).fill(color).frame(width: 10, height: 10)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
                 Text(vm.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Spacer()
-                Text("↓ \(Format.rate(vm.downRate, units: units))   ↑ \(Format.rate(vm.upRate, units: units))")
-                    .foregroundStyle(.secondary).monospacedDigit()
+                Spacer(minLength: 8)
+                Text((ping.map { "ping \($0)  ·  " } ?? "") + "↓ \(Format.rate(vm.downRate, units: units))  ↑ \(Format.rate(vm.upRate, units: units))")
+                    .foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
             }
             HStack(alignment: .top, spacing: 14) {
                 Meter(label: "CPU", value: Format.cores(vm.cpuCores, vm.cpuAllocated),
                       fraction: fraction(vm.cpuCores, vm.cpuAllocated.map { Double($0) }),
-                      explanation: Explain.cpu(vm), active: $explanation)
+                      color: color, explanation: Explain.cpu(vm), active: $explanation)
                 Meter(label: "Memory", value: Format.memoryPair(vm.memoryBytes, vm.memoryAllocatedBytes),
                       fraction: fraction(vm.memoryBytes.map { Double($0) }, vm.memoryAllocatedBytes.map { Double($0) }),
-                      explanation: nil, active: $explanation)
+                      color: color, explanation: nil, active: $explanation)
             }
         }
     }
@@ -180,6 +196,7 @@ private struct Meter: View {
     let label: String
     let value: String
     let fraction: Double?
+    let color: Color
     let explanation: String?
     @Binding var active: String?
 
@@ -189,7 +206,7 @@ private struct Meter: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.10))
-                    Capsule().fill(explanation == nil ? Color.accentColor : Color.orange)
+                    Capsule().fill(explanation == nil ? color : Color.orange)
                         .frame(width: geo.size.width * (fraction ?? 0))
                 }
             }
@@ -198,22 +215,35 @@ private struct Meter: View {
     }
 }
 
-/// Host figures, one per line so no label is ever truncated.
+/// Host figures under one heading, one per line so no label is ever truncated. Same order as the detail window.
 private struct HostBrief: View {
     let host: HostSummary
+    let link: LinkInfo?
     @Binding var explanation: String?
 
+    private var linkText: String {
+        guard let link else { return "—" }
+        switch link.kind {
+        case "wifi": return link.rssi.map { "Wi-Fi, \($0) dBm" } ?? "Wi-Fi"
+        case "ethernet": return link.speedMbps.map { "Ethernet, \(Int($0.rounded())) Mbps" } ?? "Ethernet"
+        case "none": return "Offline"
+        default: return link.interface ?? "Other"
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("This Mac").font(.system(size: 13, weight: .semibold))
+            ValueLine(label: "Memory pressure", value: host.pressure.rawValue.capitalized,
+                      explanation: Explain.pressure(host), active: $explanation)
+            ValueLine(label: "Swap used",
+                      value: host.swapTotal > 0 ? "\(Format.memory(host.swapUsed)) / \(Format.memory(host.swapTotal))" : "off",
+                      explanation: Explain.swap(host), active: $explanation)
             ValueLine(label: "Allocatable memory", value: Format.memory(host.allocatable),
                       explanation: Explain.allocatable(host), active: $explanation)
             ValueLine(label: "Cores allocated", value: "\(host.allocatedCores) / \(host.physicalCores)",
                       explanation: Explain.cores(host), active: $explanation)
-            ValueLine(label: "Swap",
-                      value: host.swapTotal > 0 ? "\(Format.memory(host.swapUsed)) / \(Format.memory(host.swapTotal))" : "off",
-                      explanation: Explain.swap(host), active: $explanation)
-            ValueLine(label: "Memory pressure", value: host.pressure.rawValue.capitalized,
-                      explanation: Explain.pressure(host), active: $explanation)
+            ValueLine(label: "Network link", value: linkText, explanation: Explain.link(link), active: $explanation)
         }
     }
 }

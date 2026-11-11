@@ -64,6 +64,14 @@ final class DetailModel: ObservableObject {
         setEnd(t.addingTimeInterval(Double(lengthSeconds) / 2))
     }
 
+    /// Moves the pinned moment by whole samples (negative = earlier). With nothing pinned it starts from the end of the frame.
+    func stepPin(samples: Int) {
+        let step = max(1000, Int64(history.bucketMs)) * Int64(samples)
+        let base = (pin ?? frameEnd).msSince1970
+        let latest = min(history.to, Date().msSince1970)
+        pin = Date(ms: min(max(history.from, base + step), latest))
+    }
+
     private func setEnd(_ date: Date?) {
         if let date, date < Date() { end = date } else { end = nil }
         hover = nil

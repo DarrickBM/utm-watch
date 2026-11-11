@@ -3,7 +3,7 @@ import SwiftUI
 import UTMWatchCore
 import UTMWatchStore
 
-/// The detail window: time-frame controls, the indicator table, host tiles and the trend tracks.
+/// The detail window: time-frame controls, the moment being read, host status, VM chips and the trend tracks.
 struct DetailView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var settings: AppSettings
@@ -23,30 +23,34 @@ struct DetailView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            // VM cards on the left (they scroll on their own when there are many); host tiles and the
-            // tracks on the right, where the tracks adapt to whatever height is left. Nothing else scrolls.
-            HStack(alignment: .top, spacing: 14) {
-                sidebar(readout)
-                VStack(alignment: .leading, spacing: 12) {
-                    if let readout { tiles(readout) }
-                    GeometryReader { geo in
-                        TracksView(history: detail.history, order: model.ring.order, units: settings.rateUnits,
-                                   readout: detail.readoutTime?.msSince1970, pin: detail.pin?.msSince1970, hover: detail.hover?.msSince1970,
-                                   onHover: { ms in
-                                       let d = ms.map { Date(ms: $0) }
-                                       if d != detail.hover { detail.hover = d }
-                                   },
-                                   onPin: { detail.pin = Date(ms: $0) },
-                                   availableHeight: geo.size.height, focus: detail.focus)
-                    }
-                    .frame(minHeight: 380)
+            // The moment being read heads everything below it: the host figures, the VM chips and the
+            // tracks, where every reading sits beside its own line. Only the tracks flex with the window.
+            VStack(alignment: .leading, spacing: 0) {
+                header(readout).padding(.bottom, 12)
+                Divider()
+                statusRow(readout).padding(.vertical, 10)
+                Divider()
+                chipsRow(readout).padding(.top, 10).padding(.bottom, 10)
+                GeometryReader { geo in
+                    TracksView(history: detail.history, order: model.ring.order, units: settings.rateUnits,
+                               readout: detail.readoutTime?.msSince1970, pin: detail.pin?.msSince1970, hover: detail.hover?.msSince1970,
+                               onHover: { ms in
+                                   let d = ms.map { Date(ms: $0) }
+                                   if d != detail.hover { detail.hover = d }
+                               },
+                               onPin: { detail.pin = Date(ms: $0) },
+                               availableHeight: geo.size.height, focus: detail.focus)
                 }
+                .frame(minHeight: 380)
             }
-            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 10)
+            .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 10)
+            // White content between the grey toolbar and footer, as in the design.
+            .background(Color(nsColor: .textBackgroundColor))
             Divider()
             footer
         }
         .frame(minWidth: 1180, minHeight: 720)
+        .onChange(of: detail.pin) { _, _ in promptCopied = false }
     }
 
     // MARK: Time frame controls
@@ -73,15 +77,19 @@ struct DetailView: View {
 
             Spacer(minLength: 8)
 
-            if detail.isLive {
+            if detail.isLive && detail.pin == nil {
                 HStack(spacing: 6) {
                     Circle().fill(Color.green).frame(width: 8, height: 8)
                     Text("Live").fontWeight(.semibold)
                 }
             } else {
+                if let pin = detail.pin {
+                    Text("Showing \(Self.shortStamp.string(from: pin))").foregroundStyle(.secondary).monospacedDigit().fixedSize()
+                }
                 Button("Back to live") { detail.goLive() }.buttonStyle(.borderedProminent)
             }
-            Button { onSettings() } label: { Label("Settings", systemImage: "slider.horizontal.3") }
+            Button { onSettings() } label: { Image(systemName: "slider.horizontal.3") }
+                .help("Settings").accessibilityLabel("Settings")
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
     }
@@ -97,89 +105,142 @@ struct DetailView: View {
         return "\(short.string(from: from)) – \(short.string(from: to))"
     }
 
-    // MARK: Readout
+    // MARK: Readout header
 
-    // MARK: Sidebar
-
-    private func sidebar(_ r: Readout?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func header(_ r: Readout?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             if let r {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(r.kind.uppercased()).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-                    Text(Self.stamp.string(from: r.time)).font(.system(size: 17, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
-                }
-                // Reserved even when nothing is pinned, so pinning does not push the cards down.
-                HStack(spacing: 6) {
-                    Button("Unpin") { detail.pin = nil; promptCopied = false }
-                    Button(promptCopied ? "Prompt copied" : "Ask AI about this moment") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(Self.prompt(for: r.time), forType: .string)
-                        promptCopied = true
-                    }
-                    .help("Copies a question you can paste to an AI agent connected to UTM Watch")
-                }
-                .controlSize(.small)
-                .opacity(detail.pin == nil ? 0 : 1).disabled(detail.pin == nil)
-
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(r.rows) { row in card(row) }
-                        if r.rows.isEmpty { Text("No VM recorded at this moment").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
-                    }
-                    .padding(.trailing, 2)
-                }
-                Text(detail.focus == nil ? "Click a VM to focus its lines in the tracks." : "Showing one VM in the tracks. Click its card again to show all.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(Self.stamp.string(from: r.time)).font(.system(size: 20, weight: .semibold)).monospacedDigit().lineLimit(1)
+                Text(r.kind.lowercased()).foregroundStyle(.secondary)
             } else {
-                Text("Collecting first sample…").foregroundStyle(.secondary)
-                Spacer()
+                Text("Collecting first sample…").font(.system(size: 20, weight: .semibold)).foregroundStyle(.secondary)
             }
+            Spacer(minLength: 8)
+            // Reserved even when nothing is pinned, so pinning does not move the layout.
+            HStack(spacing: 6) {
+                Button(promptCopied ? "Prompt copied" : "Ask AI about this moment") {
+                    guard let pin = detail.pin else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(Self.prompt(for: pin), forType: .string)
+                    promptCopied = true
+                }
+                .help("Copies a question you can paste to an AI agent connected to UTM Watch")
+                Button("Unpin") { detail.pin = nil }.help("Esc")
+            }
+            .opacity(detail.pin == nil ? 0 : 1).disabled(detail.pin == nil)
         }
-        .frame(width: 262, alignment: .leading)
     }
 
-    private func card(_ row: Readout.Row) -> some View {
+    // MARK: Host status
+
+    /// Always the same five figures in the same places, so nothing moves while scrubbing across
+    /// moments that have no data.
+    private func statusRow(_ r: Readout?) -> some View {
+        HStack(alignment: .top, spacing: 24) {
+            if let h = r?.host {
+                stat("Memory pressure", h.pressure.rawValue.capitalized, h.pressure == .normal ? "" : "short of memory",
+                     Explain.pressure(h), okMark: h.pressure == .normal)
+                stat("Swap used", h.swapTotal > 0 ? "\(Format.memory(h.swapUsed)) / \(Format.memory(h.swapTotal))" : "off",
+                     h.swapTotal > 0 ? "\(Int((Double(h.swapUsed) / Double(h.swapTotal) * 100).rounded()))%" : "no swap file", Explain.swap(h))
+                stat("Allocatable memory", Format.memory(h.allocatable), "free now \(Format.memory(h.freeNow))", Explain.allocatable(h))
+                stat("Cores allocated", "\(h.allocatedCores) / \(h.physicalCores)", h.overcommitted ? "overcommitted" : "to running VMs", Explain.cores(h))
+            } else {
+                stat("Memory pressure", "—", "nothing recorded", nil)
+                stat("Swap used", "—", "", nil)
+                stat("Allocatable memory", "—", "", nil)
+                stat("Cores allocated", "—", "", nil)
+            }
+            if let l = r?.link { linkStat(l) } else { stat("Network link", "—", "", nil) }
+        }
+    }
+
+    private func linkStat(_ l: LinkInfo) -> some View {
+        let warning = Explain.link(l)
+        switch l.kind {
+        case "wifi":
+            let rate = l.txRateMbps.map { "\(Int($0.rounded())) Mbps" }
+            return stat("Network link", l.rssi.map { "Wi-Fi, \($0) dBm" } ?? "Wi-Fi", warning != nil ? "weak signal" : (rate ?? "connected"), warning)
+        case "ethernet":
+            return stat("Network link", "Ethernet", l.speedMbps.map { "\(Int($0.rounded())) Mbps" } ?? "connected", warning)
+        case "none":
+            return stat("Network link", "Offline", "no default route", warning)
+        default:
+            return stat("Network link", l.interface ?? "Other", "connected", warning)
+        }
+    }
+
+    private func stat(_ label: String, _ value: String, _ sub: String, _ warning: String?, okMark: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if warning != nil {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).accessibilityLabel("Warning")
+                } else if okMark {
+                    Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold)).foregroundStyle(.green)
+                }
+                Text(value).font(.system(size: 15, weight: .semibold)).monospacedDigit().layoutPriority(1)
+                Text(sub).font(.system(size: 12)).foregroundStyle(.secondary).minimumScaleFactor(0.85)
+            }
+        }
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(warning ?? "")
+    }
+
+    // MARK: VM chips and the key to the shaded periods
+
+    private func chipsRow(_ r: Readout?) -> some View {
+        HStack(spacing: 14) {
+            if let r, !r.rows.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) { ForEach(r.rows) { row in chip(row) } }.padding(1)
+                }
+            } else {
+                Text(r == nil ? "" : "No VM recorded at this moment").foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 12) {
+                Text("Shaded")
+                swatch(TracksView.pressureTint.opacity(0.45), "Memory pressure")
+                swatch(TracksView.linkTint(scheme).opacity(0.38), "Weak Wi-Fi")
+                swatch(Color.primary.opacity(0.14), "No data")
+            }
+            .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize()
+            .help("These periods are shaded through every track, so you can see what else changed while they lasted")
+        }
+        .frame(height: 28)
+    }
+
+    private func swatch(_ color: Color, _ label: String) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 12, height: 12)
+                .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.primary.opacity(0.15)))
+            Text(label)
+        }
+    }
+
+    /// One chip per VM: its color, name and state. Clicking it keeps that VM's lines bright and fades the others.
+    private func chip(_ row: Readout.Row) -> some View {
         let selected = detail.focus == row.id
         let dimmed = detail.focus != nil && !selected
         return Button {
             detail.focus = selected ? nil : row.id
         } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    RoundedRectangle(cornerRadius: 3).fill(SeriesPalette.color(index: row.colorIndex, scheme: scheme)).frame(width: 10, height: 10)
-                    Text(row.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Spacer(minLength: 4)
-                    Text(row.state).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
-                }
-                cardLine("CPU", row.cpu, warning: row.cpuWarning)
-                cardLine("Memory", row.mem)
-                cardLine("↓ Down", row.down)
-                cardLine("↑ Up", row.up)
-                cardLine("Ping", row.ping)
-                cardLine("Total ↓ / ↑", row.total)
+            HStack(spacing: 7) {
+                RoundedRectangle(cornerRadius: 3).fill(SeriesPalette.color(index: row.colorIndex, scheme: scheme)).frame(width: 10, height: 10)
+                Text(row.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text(row.state).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(selected ? 0.07 : 0.0)))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? Color.primary.opacity(0.75) : Color.primary.opacity(0.12), lineWidth: selected ? 1.5 : 1))
-            .contentShape(RoundedRectangle(cornerRadius: 10))
-            .opacity(dimmed ? 0.55 : 1)
+            .padding(.horizontal, 10).frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(selected ? 0.07 : 0.0)))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(selected ? Color.primary.opacity(0.75) : Color.primary.opacity(0.16), lineWidth: selected ? 1.5 : 1))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .opacity(dimmed ? 0.6 : 1)
         }
         .buttonStyle(.plain)
+        .help(selected ? "Click to show all VMs again. Total ↓ / ↑ since it started: \(row.total)"
+                       : "Click to show only this VM in the tracks. Total ↓ / ↑ since it started: \(row.total)")
         .accessibilityLabel("\(row.name), \(row.state). \(selected ? "Focused. Click to show all VMs." : "Click to focus this VM in the tracks.")")
-    }
-
-    private func cardLine(_ label: String, _ value: String, warning: String? = nil) -> some View {
-        HStack(spacing: 5) {
-            Text(label).foregroundStyle(.secondary)
-            Spacer(minLength: 6)
-            if warning != nil {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).accessibilityLabel("Warning")
-            }
-            Text(value).monospacedDigit().lineLimit(1)
-        }
-        .font(.system(size: 12))
-        .help(warning ?? "")
     }
 
     @State private var promptCopied = false
@@ -191,77 +252,22 @@ struct DetailView: View {
     }
 
     private static let stamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE d MMM, HH:mm:ss"; return f }()
+    private static let shortStamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE d MMM, HH:mm:ss"; return f }()
 
     @Environment(\.colorScheme) private var scheme
-
-    /// Always the same five tiles at the same size, so the layout does not move while scrubbing
-    /// across moments that have no data.
-    private func tiles(_ r: Readout) -> some View {
-        HStack(spacing: 10) {
-            if let h = r.host {
-                tile("Allocatable memory", Format.memory(h.allocatable), "actually free: \(Format.memory(h.freeNow))", Explain.allocatable(h))
-                tile("Cores allocated", "\(h.allocatedCores) / \(h.physicalCores)",
-                     h.overcommitted ? "overcommitted" : "\(h.physicalCores - h.allocatedCores) not allocated", Explain.cores(h))
-                tile("Host memory pressure", h.pressure.rawValue.capitalized, h.pressure == .normal ? "no alert" : "macOS is short of memory",
-                     Explain.pressure(h), okMark: h.pressure == .normal)
-                tile("Swap used", h.swapTotal > 0 ? "\(Format.memory(h.swapUsed)) / \(Format.memory(h.swapTotal))" : "off",
-                     h.swapTotal > 0 ? "\(Int((Double(h.swapUsed) / Double(h.swapTotal) * 100).rounded()))% of swap in use" : "no swap file",
-                     Explain.swap(h))
-            } else {
-                tile("Allocatable memory", "—", "nothing recorded then", nil)
-                tile("Cores allocated", "—", "nothing recorded then", nil)
-                tile("Host memory pressure", "—", "nothing recorded then", nil)
-                tile("Swap used", "—", "nothing recorded then", nil)
-            }
-            if let l = r.link { linkTile(l) } else { tile("Network link", "—", "nothing recorded then", nil) }
-        }
-    }
-
-    private func linkTile(_ l: LinkInfo) -> some View {
-        let warning = Explain.link(l)
-        switch l.kind {
-        case "wifi":
-            let detail = [l.txRateMbps.map { "\(Int($0.rounded())) Mbps" }, l.channel.map { "channel \($0)" }].compactMap { $0 }.joined(separator: ", ")
-            return tile("Network link", l.rssi.map { "Wi-Fi, \($0) dBm" } ?? "Wi-Fi", warning != nil ? "weak signal" : (detail.isEmpty ? "connected" : detail), warning)
-        case "ethernet":
-            return tile("Network link", "Ethernet", l.speedMbps.map { "\(Int($0.rounded())) Mbps" } ?? "connected", warning)
-        case "none":
-            return tile("Network link", "Offline", "no default route", warning)
-        default:
-            return tile("Network link", l.interface ?? "Other", "connected", warning)
-        }
-    }
-
-    private func tile(_ label: String, _ value: String, _ sub: String, _ warning: String?, okMark: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                if warning != nil {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).accessibilityLabel("Warning")
-                } else if okMark {
-                    Image(systemName: "checkmark").foregroundStyle(.green)
-                }
-                Text(value).font(.system(size: 20, weight: .semibold)).monospacedDigit().minimumScaleFactor(0.6)
-            }
-            Text(sub).font(.system(size: 12)).foregroundStyle(.secondary)
-        }
-        .lineLimit(1)
-        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 10).strokeBorder(warning == nil ? Color.primary.opacity(0.12) : Color.orange.opacity(0.6)))
-        .help(warning ?? "")
-    }
 
     private var footer: some View {
         HStack {
             Text(storageText)
-            Spacer()
             if detail.history.bucketMs > 5000 {
-                Text("Each point averages \(Self.duration(detail.history.bucketMs)); the faint line is the peak")
+                Text("· each point averages \(Self.duration(detail.history.bucketMs)), the faint line is the peak")
             }
+            Spacer()
+            Text("Click a track to pin a moment. ← → step one sample, Shift for ten, Esc unpins.")
         }
         .font(.system(size: 12)).foregroundStyle(.secondary)
-        .padding(.horizontal, 16).padding(.vertical, 8)
+        .lineLimit(1)
+        .padding(.horizontal, 20).padding(.vertical, 8)
     }
 
     private var storageText: String {
