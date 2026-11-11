@@ -104,3 +104,16 @@ public enum Format {
         return align == .left ? text + fill : fill + text
     }
 }
+
+/// Rules for a name the user gives a VM in UTM Watch.
+public enum VMName {
+    public static let maxLength = 40
+
+    /// What is actually stored: one line, no control characters, runs of spaces collapsed, at most
+    /// `maxLength` characters. An empty result means "use the UTM name".
+    public static func clean(_ raw: String) -> String {
+        let scalars = raw.unicodeScalars.map { $0.properties.generalCategory == .control || CharacterSet.newlines.contains($0) ? " " : Character($0) }
+        let words = String(scalars).split(separator: " ", omittingEmptySubsequences: true)
+        return String(words.joined(separator: " ").prefix(maxLength)).trimmingCharacters(in: .whitespaces)
+    }
+}

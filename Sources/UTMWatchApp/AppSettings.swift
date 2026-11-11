@@ -12,6 +12,8 @@ final class AppSettings: ObservableObject {
     /// The MCP helper reads this from the app's defaults and refuses to serve when it is off.
     @Published var allowAgents: Bool { didSet { defaults.set(allowAgents, forKey: "allowAgents") } }
     @Published var captureProcesses: Bool { didSet { defaults.set(captureProcesses, forKey: "captureProcesses") } }
+    /// Names the user gave VMs in the detail window, by VM key. A VM without an entry shows its UTM name.
+    @Published var vmAliases: [String: String] { didSet { defaults.set(vmAliases, forKey: "vmAliases") } }
     @Published var launchAtLogin: Bool
     @Published var launchAtLoginError: String?
 
@@ -25,6 +27,7 @@ final class AppSettings: ObservableObject {
         retentionDays = [1, 7, 30].contains(days) ? days : 7
         allowAgents = defaults.bool(forKey: "allowAgents")
         captureProcesses = defaults.bool(forKey: "captureProcesses")
+        vmAliases = defaults.dictionary(forKey: "vmAliases") as? [String: String] ?? [:]
         launchAtLogin = SMAppService.mainApp.status == .enabled
         // Written explicitly so the helper, a separate process, sees the value even before it is ever toggled.
         defaults.set(allowAgents, forKey: "allowAgents")

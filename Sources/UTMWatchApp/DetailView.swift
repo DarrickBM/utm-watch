@@ -230,28 +230,78 @@ struct DetailView: View {
     }
 
     /// One chip per VM: its color, name and state. Clicking it keeps that VM's lines bright and fades the others.
+    /// A pencil appears under the pointer; clicking it turns the name into a field.
     private func chip(_ row: Readout.Row) -> some View {
         let selected = detail.focus == row.id
         let dimmed = detail.focus != nil && !selected
-        return Button {
-            detail.focus = selected ? nil : row.id
-        } label: {
-            HStack(spacing: 7) {
-                RoundedRectangle(cornerRadius: 3).fill(SeriesPalette.color(index: row.colorIndex, scheme: scheme)).frame(width: 10, height: 10)
-                Text(row.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Text(row.state).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+        let editing = renaming == row.id
+        return HStack(spacing: 7) {
+            RoundedRectangle(cornerRadius: 3).fill(SeriesPalette.color(index: row.colorIndex, scheme: scheme)).frame(width: 10, height: 10)
+            if editing {
+                TextField("Name", text: $renameDraft)
+                    .textFieldStyle(.plain).font(.system(size: 13, weight: .semibold))
+                    .frame(width: 160)
+                    .focused($renameFocused)
+                    .onAppear { renameFocused = true }
+                    .onChange(of: renameDraft) { _, text in
+                        // Stop at the limit while typing or pasting, so what is seen is what is saved.
+                        if text.count > VMName.maxLength { renameDraft = String(text.prefix(VMName.maxLength)) }
+                    }
+                    .onSubmit { commitRename() }
+                    .onExitCommand { renaming = nil }
+                    .onChange(of: renameFocused) { _, focused in if !focused, renaming == row.id { commitRename() } }
+                    .accessibilityLabel("Name for \(row.name)")
+            } else {
+                Button {
+                    detail.focus = selected ? nil : row.id
+                } label: {
+                    HStack(spacing: 7) {
+                        Text(row.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                        Text(row.state).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    .frame(height: 26).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(selected ? "Click to show all VMs again. Total ↓ / ↑ since it started: \(row.total)"
+                               : "Click to show only this VM in the tracks. Total ↓ / ↑ since it started: \(row.total)")
+                .accessibilityLabel("\(row.name), \(row.state). \(selected ? "Focused. Click to show all VMs." : "Click to focus this VM in the tracks.")")
+                if hoveredChip == row.id {
+                    Button {
+                        renameDraft = row.name
+                        renaming = row.id
+                        renameFocused = true
+                    } label: {
+                        Image(systemName: "pencil").font(.system(size: 11, weight: .semibold))
+                            .frame(width: 20, height: 20)
+                            .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.08)))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Rename this VM in UTM Watch, up to \(VMName.maxLength) characters. Save an empty name to go back to the UTM name. UTM itself is not changed.")
+                    .accessibilityLabel("Rename \(row.name)")
+                }
             }
-            .padding(.horizontal, 10).frame(height: 26)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(selected ? 0.07 : 0.0)))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(selected ? Color.primary.opacity(0.75) : Color.primary.opacity(0.16), lineWidth: selected ? 1.5 : 1))
-            .contentShape(RoundedRectangle(cornerRadius: 6))
-            .opacity(dimmed ? 0.6 : 1)
         }
-        .buttonStyle(.plain)
-        .help(selected ? "Click to show all VMs again. Total ↓ / ↑ since it started: \(row.total)"
-                       : "Click to show only this VM in the tracks. Total ↓ / ↑ since it started: \(row.total)")
-        .accessibilityLabel("\(row.name), \(row.state). \(selected ? "Focused. Click to show all VMs." : "Click to focus this VM in the tracks.")")
+        .padding(.leading, 10).padding(.trailing, editing || hoveredChip == row.id ? 4 : 10).frame(height: 26)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(selected ? 0.07 : 0.0)))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(editing ? Color.accentColor : (selected ? Color.primary.opacity(0.75) : Color.primary.opacity(0.16)), lineWidth: selected || editing ? 1.5 : 1))
+        .opacity(dimmed && !editing ? 0.6 : 1)
+        .onHover { inside in
+            if inside { hoveredChip = row.id } else if hoveredChip == row.id { hoveredChip = nil }
+        }
     }
+
+    private func commitRename() {
+        guard let key = renaming else { return }
+        renaming = nil
+        model.rename(vm: key, to: renameDraft)
+        detail.refresh(force: true)
+    }
+
+    @State private var hoveredChip: String?
+    @State private var renaming: String?
+    @State private var renameDraft = ""
+    @FocusState private var renameFocused: Bool
 
     @State private var promptCopied = false
 

@@ -315,5 +315,14 @@ do {
     check(det.ingest(probe("none", nil)).map(\.kind) == ["link_down"], "link loss detected")
 }
 
+do {
+    check(VMName.clean("  Acme   Corp \n") == "Acme Corp", "name is trimmed and spaces collapsed")
+    check(VMName.clean(" \t\n ") == "", "a blank name is empty, meaning the UTM name")
+    check(VMName.clean("Acme\nCorp\u{07}") == "Acme Corp", "line breaks and control characters become spaces")
+    check(VMName.clean(String(repeating: "a", count: 100)).count == VMName.maxLength, "name is cut at the limit")
+    check(VMName.clean(String(repeating: "a", count: 39) + "  b") == String(repeating: "a", count: 39), "no trailing space after the cut")
+    check(VMName.clean("客户 👨‍👩‍👧 甲") == "客户 👨‍👩‍👧 甲", "non-Latin names and emoji survive")
+}
+
 print("\(checks - failures)/\(checks) checks passed")
 exit(failures == 0 ? 0 : 1)

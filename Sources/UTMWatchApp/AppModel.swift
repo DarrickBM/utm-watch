@@ -21,6 +21,24 @@ final class AppModel: ObservableObject {
     private(set) var store: HistoryStore?
     private var recorder: Recorder?
     private var detector = EventDetector()
+    /// Each VM's name in UTM, kept so clearing a user-given name can bring it back.
+    private var utmNames: [String: String] = [:]
+
+    /// Gives a VM the user's own name; an empty name returns it to its UTM name. UTM is not changed.
+    func rename(vm key: String, to newName: String) {
+        var name = VMName.clean(newName)
+        // Typing the UTM name back is the same as clearing it: the VM follows UTM again if it is renamed there.
+        if name == utmNames[key] { name = "" }
+        if name.isEmpty { settings.vmAliases[key] = nil } else { settings.vmAliases[key] = name }
+        // A VM that UTM no longer lists has no name to fall back to; it keeps the one it has.
+        guard let shown = name.isEmpty ? utmNames[key] : name else { return }
+        if var snap = snapshot, let i = snap.rows.firstIndex(where: { $0.id == key }) {
+            snap.rows[i].name = shown
+            snapshot = snap
+        }
+        ring.rename(key, to: shown)
+        if let store { DispatchQueue.global(qos: .utility).async { store.rename(key: key, to: shown) } }
+    }
 
     var running: [VMRow] { (snapshot?.rows ?? []).filter { $0.pid != nil } }
 
@@ -53,7 +71,14 @@ final class AppModel: ObservableObject {
     }
 
     /// Called on the main thread for every new sample.
-    func ingest(_ snap: Snapshot) {
+    func ingest(_ raw: Snapshot) {
+        // Rows leave here under the user's own names, so the views, the recorded history and the
+        // MCP tools all show the same name.
+        var snap = raw
+        for i in snap.rows.indices {
+            utmNames[snap.rows[i].id] = snap.rows[i].name
+            if let alias = settings.vmAliases[snap.rows[i].id] { snap.rows[i].name = alias }
+        }
         // The first sample or two after launch come before the VM configs are read, so limits and
         // headroom are not known yet. Show them, but do not record them as history.
         guard !snap.notices.contains(where: { $0.hasPrefix("Reading configs") }) else { snapshot = snap; return }

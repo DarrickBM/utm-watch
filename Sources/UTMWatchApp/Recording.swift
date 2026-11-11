@@ -22,6 +22,8 @@ final class LiveRing {
         for vm in knownVMs { infos[vm.key] = vm; if !order.contains(vm.key) { order.append(vm.key) } }
     }
 
+    func rename(_ key: String, to name: String) { infos[key]?.name = name }
+
     func append(_ s: Snapshot, events new: [HistoryEvent]) {
         let ts = s.timestamp.msSince1970
         for row in s.rows where row.pid != nil {

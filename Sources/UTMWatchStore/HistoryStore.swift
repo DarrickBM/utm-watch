@@ -300,6 +300,17 @@ public final class HistoryStore {
         }
     }
 
+    /// Changes the name a recorded VM is shown under, including one that is not running now.
+    public func rename(key: String, to name: String) {
+        queue.sync {
+            guard let id = vmIDs[key], vmNames[key] != name else { return }
+            do {
+                try db.prepare("UPDATE vm SET name = ? WHERE id = ?").bind(1, name).bind(2, id).run()
+                vmNames[key] = name
+            } catch { FileLog.shared.log("vm rename failed: \(error)") }
+        }
+    }
+
     /// Every VM ever recorded, in the order first seen.
     public func knownVMs() -> [VMInfo] {
         queue.sync {
