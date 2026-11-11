@@ -1,5 +1,5 @@
 import Foundation
-import UTMWatchCore
+import UTMWatchModel
 
 /// Turns consecutive snapshots into timeline events: VM starts and stops, memory pressure changes,
 /// swap crossing 80%, and a VM held at its CPU limit. Pure state machine, no I/O.

@@ -19,8 +19,13 @@ public struct UTMBundle: Equatable {
 }
 
 public enum UTMBundles {
+    /// `UTMWATCH_NO_UTM=1` keeps a trial copy of the app away from UTM entirely: it reads none of UTM's files and
+    /// sends UTM no questions, so macOS never asks for permissions on its behalf. It then shows no VMs of its own.
+    public static let disabled = ProcessInfo.processInfo.environment["UTMWATCH_NO_UTM"] == "1"
+
     public static var defaultDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        if disabled { return URL(fileURLWithPath: "/var/empty/utmwatch-no-utm", isDirectory: true) }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Containers/com.utmapp.UTM/Data/Documents", isDirectory: true)
     }
 
@@ -34,6 +39,11 @@ public enum UTMBundles {
 
     /// Loads a bundle; falls back to the folder name if config.plist is missing or unreadable (PRD R4).
     public static func load(url: URL) -> UTMBundle? {
+        // A trial copy knows a running VM by its folder name only, without opening anything inside UTM's folder.
+        if disabled {
+            return UTMBundle(url: url, uuid: nil, name: url.deletingPathExtension().lastPathComponent, backend: .unknown,
+                             cpuCount: nil, memoryBytes: nil, macAddresses: [], networkModes: [], isMacOS: false)
+        }
         let plistURL = url.appendingPathComponent("config.plist")
         guard let data = try? Data(contentsOf: plistURL),
               let any = try? PropertyListSerialization.propertyList(from: data, format: nil),

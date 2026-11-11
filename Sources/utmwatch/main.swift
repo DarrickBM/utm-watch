@@ -17,6 +17,7 @@ if CommandLine.arguments.contains("--probe") {
     print("top CPU:", top.byCPU.map { "\($0.name) \($0.cpuCores)" }.joined(separator: ", "))
     exit(0)
 }
+if CommandLine.arguments.dropFirst().first == "fleet" { FleetCommand.run(Array(CommandLine.arguments.dropFirst(2))) }
 let options = CLIOptions.parse(CommandLine.arguments)
 if let path = options.logPath { FileLog.shared.open(path: path) }
 if options.once {

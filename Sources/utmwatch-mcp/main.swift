@@ -3,6 +3,7 @@
 // Protocol: JSON-RPC 2.0, one message per line (MCP stdio transport).
 import Foundation
 import UTMWatchCore
+import UTMWatchFleet
 import UTMWatchStore
 
 let serverVersion = "0.1.0"
@@ -69,14 +70,92 @@ func parseTime(_ value: Any?, default fallback: Int64? = nil, now: Int64) throws
     throw ToolError(message: "cannot read the time \"\(raw)\". Use ISO 8601 such as 2026-11-10T21:40:00+08:00, a local time such as 2026-11-10 21:40, or a relative form such as -2h.")
 }
 
-func openStore() throws -> HistoryStore {
+func requireAgentAccess() throws {
     if appDefaults?.object(forKey: "allowAgents") as? Bool == false {
         throw ToolError(message: "Access for AI agents is switched off in UTM Watch's Settings (AI diagnosis > Let AI agents read history).")
     }
+}
+
+func openStore() throws -> HistoryStore {
+    try requireAgentAccess()
     guard FileManager.default.fileExists(atPath: HistoryStore.defaultPath) else {
         throw ToolError(message: "No history found. Open UTM Watch once so it starts recording.")
     }
     do { return try HistoryStore(readOnly: true) } catch { throw ToolError(message: "Cannot open the history database: \(error)") }
+}
+
+// MARK: - Where the history comes from
+
+/// The fleet this Mac can read, if it has been given a reader token (`utmwatch fleet view`). nil = single-Mac use.
+let fleet: (client: HubClient, token: String)? = {
+    guard let id = HostIdentity.load(), let token = id.readerToken, !token.isEmpty else { return nil }
+    // A hub on the fleet's private network is reached through the app's helper, which notes its proxy while it runs.
+    if id.viaPrivateNetwork == true {
+        let proxy = (try? String(contentsOfFile: HostIdentity.proxyNotePath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Never fall back to a direct connection: the hub's private address means something else, or nothing, outside
+        // the fleet's network, and a Tailscale of the user's own could route it to an unrelated machine. With the app
+        // not running there is no proxy, so point at a closed loopback port and let the hub read as unreachable.
+        let via = (proxy?.isEmpty == false) ? proxy : "127.0.0.1:9"
+        return (HubClient(baseURL: id.hubURL, transport: URLSessionTransport(timeout: 8, proxy: via)), token)
+    }
+    return (HubClient(baseURL: id.hubURL), token)
+}()
+
+/// One Mac's history: this Mac's own database, or another Mac's history read from the fleet's hub.
+/// The tools work the same on both, because the hub returns a Mac's history exactly as that Mac reads it.
+struct Source {
+    /// The other Mac's name; nil for this Mac.
+    var mac: String?
+    var state: String?
+    var lastSeen: Int64?
+    /// The time of the Mac's newest sample by its own clock, when known. Clocks differ between Macs.
+    var latestSample: Int64?
+    var totalMemory: Double
+    var physicalCores: Int
+    var load: (Int64, Int64, Int?) throws -> History
+    var knownVMs: () -> [VMInfo]
+}
+
+func hubError(_ failure: HubFailure) -> ToolError {
+    switch failure {
+    case .unreachable: return ToolError(message: "The fleet's hub did not answer. This Mac's own history is still available: call the tool without \"mac\".")
+    case .rejected(let status, let message): return ToolError(message: status == 401 ? "The hub refused this Mac's reader token. Run `utmwatch fleet view` again with a new one." : message)
+    }
+}
+
+func fleetHosts() throws -> (HubClient, String, [HostStatus]) {
+    guard let fleet else { throw ToolError(message: "This Mac cannot read a fleet. Give it a reader token with `utmwatch fleet view --hub <url> --token <reader token>`.") }
+    switch fleet.client.hosts(token: fleet.token) {
+    case .success(let hosts): return (fleet.client, fleet.token, hosts)
+    case .failure(let f): throw hubError(f)
+    }
+}
+
+/// `mac` absent: this Mac's own database, as always. `mac` given: that Mac, by name or UUID, through the hub.
+func source(_ args: [String: Any]) throws -> Source {
+    guard let wanted = (args["mac"] as? String)?.trimmingCharacters(in: .whitespaces), !wanted.isEmpty else {
+        let store = try openStore()
+        return Source(mac: nil, state: nil, lastSeen: nil, latestSample: nil, totalMemory: Double(HostStats.totalMemory), physicalCores: HostStats.physicalCores,
+                      load: { store.load(from: $0, to: $1, maxPoints: $2) }, knownVMs: { store.knownVMs() })
+    }
+    try requireAgentAccess()
+    let (client, token, hosts) = try fleetHosts()
+    let matches = hosts.filter { $0.uuid.caseInsensitiveCompare(wanted) == .orderedSame || $0.name.caseInsensitiveCompare(wanted) == .orderedSame }
+    guard let host = matches.first else {
+        throw ToolError(message: "No Mac named \"\(wanted)\" in the fleet. Known: \(hosts.map(\.name).joined(separator: ", ")).")
+    }
+    guard matches.count == 1 else {
+        throw ToolError(message: "\(matches.count) Macs are named \"\(wanted)\". Use the UUID instead: \(matches.map(\.uuid).joined(separator: ", ")).")
+    }
+    let vms = (host.snapshot?.rows ?? []).map { VMInfo(key: $0.id, name: $0.name, backend: $0.backend.rawValue) }
+    return Source(mac: host.name, state: host.state, lastSeen: host.lastSeen, latestSample: host.snapshot?.timestamp.msSince1970,
+                  totalMemory: Double(host.snapshot?.host.totalMemory ?? 0), physicalCores: host.snapshot?.host.physicalCores ?? 0,
+                  load: { from, to, maxPoints in
+                      switch client.history(hostUUID: host.uuid, from: from, to: to, maxPoints: maxPoints, token: token) {
+                      case .success(let h): return h
+                      case .failure(let f): throw hubError(f)
+                      }
+                  }, knownVMs: { vms })
 }
 
 func range(_ args: [String: Any], defaultFrom: String, now: Int64) throws -> (Int64, Int64) {
@@ -146,7 +225,7 @@ func nearest<P>(_ points: [P], _ t: Int64, within: Int64, time: (P) -> Int64) ->
 }
 
 /// Every value at (or nearest to) one moment.
-func momentJSON(_ h: History, at t: Int64) -> [String: Any] {
+func momentJSON(_ h: History, at t: Int64, _ src: Source) -> [String: Any] {
     var vms: [[String: Any]] = []
     for vm in h.vms {
         var d: [String: Any] = ["name": vm.name, "backend": vm.backend]
@@ -177,10 +256,10 @@ func momentJSON(_ h: History, at t: Int64) -> [String: Any] {
             "allocatableMemoryGB": r3(p.allocatable / gib),
             "memoryUsedOutsideVMsGB": r3(p.other / gib),
             "memoryUsedGB": r3(p.used / gib),
-            "totalMemoryGB": r3(Double(HostStats.totalMemory) / gib),
+            "totalMemoryGB": r3(src.totalMemory / gib),
             "memoryPressure": p.pressure == 2 ? "critical" : p.pressure == 1 ? "warning" : "normal",
             "swapUsedGB": r3(p.swapUsed / gib), "swapTotalGB": r3(p.swapTotal / gib),
-            "coresAllocatedToVMs": p.cores, "physicalCores": HostStats.physicalCores,
+            "coresAllocatedToVMs": p.cores, "physicalCores": src.physicalCores,
         ]
         if let cpu = p.cpu { host["cpuCoresBusy"] = r3(cpu) }
         out["host"] = host
@@ -235,24 +314,72 @@ let tools: [[String: Any]] = [
         "required": ["metric", "vm", "from"]]],
 ]
 
+/// With a fleet to read, every tool takes an optional "mac" and one more tool lists the Macs. Without one, the tools are unchanged.
+let offeredTools: [[String: Any]] = {
+    guard fleet != nil else { return tools }
+    var out: [[String: Any]] = [[
+        "name": "list_macs",
+        "description": "The Macs in this fleet, as of each one's last upload to the hub: name, online or offline, memory pressure and headroom, and its running VMs with CPU and memory. Start here when it is not known which Mac has the problem.",
+        "inputSchema": ["type": "object", "properties": [String: Any]()],
+    ]]
+    for var tool in tools {
+        var schema = tool["inputSchema"] as? [String: Any] ?? [:]
+        var properties = schema["properties"] as? [String: Any] ?? [:]
+        properties["mac"] = ["type": "string", "description": "Which Mac to look at: a name or UUID from list_macs. Leave out for the Mac this server runs on."]
+        schema["properties"] = properties
+        tool["inputSchema"] = schema
+        out.append(tool)
+    }
+    return out
+}()
+
 func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
     let now = Date().msSince1970
-    let store = try openStore()
+    if name == "list_macs" {
+        try requireAgentAccess()
+        let (_, _, hosts) = try fleetHosts()
+        return ["macs": hosts.map { h -> [String: Any] in
+            var d: [String: Any] = ["name": h.name, "uuid": h.uuid, "state": h.state]
+            if let seen = h.lastSeen { d["lastSeenSecondsAgo"] = max(0, Int((now - seen) / 1000)) }
+            if let v = h.appVersion { d["appVersion"] = v }
+            if let skew = h.skewMs, abs(skew) > 5000 { d["clockOffSeconds"] = Int(skew / 1000) }
+            if let s = h.snapshot {
+                d["memoryPressure"] = s.host.pressure.rawValue
+                d["allocatableMemoryGB"] = r3(Double(s.host.allocatable) / gib)
+                d["vms"] = s.rows.filter { $0.pid != nil }.map { ["name": $0.name, "cpuCores": r3($0.cpuCores ?? 0), "memoryGB": r3(Double($0.memoryBytes ?? 0) / gib)] as [String: Any] }
+            }
+            return d
+        }, "note": "State is as of each Mac's last upload. Pass a Mac's name as \"mac\" to the other tools to look into it."]
+    }
+    let src = try source(args)
+    var result = try runTool(name, args, src, now: now)
+    // Answers about another Mac say so; answers about this Mac are exactly what they were before fleets existed.
+    if let mac = src.mac, var d = result as? [String: Any] {
+        d["mac"] = mac
+        if src.state == "offline" { d["macState"] = "offline: the hub has not heard from this Mac" + (src.lastSeen.map { " for \(max(0, (now - $0) / 1000)) s" } ?? "") }
+        result = d
+    }
+    return result
+}
+
+func runTool(_ name: String, _ args: [String: Any], _ src: Source, now: Int64) throws -> Any {
     switch name {
     case "get_status":
-        let h = store.load(from: now - 90_000, to: now, maxPoints: nil)
+        // Another Mac's newest sample is found by that Mac's clock, which may differ from this one's.
+        let end = src.latestSample.map { $0 + 2000 } ?? now
+        let h = try src.load(end - 90_000, end, nil)
         guard let last = h.host.last else {
             return ["note": "No samples in the last 90 seconds: UTM Watch is not running, or the Mac has just woken up.",
-                    "knownVMs": store.knownVMs().map(\.name)]
+                    "knownVMs": src.knownVMs().map(\.name)]
         }
-        var out = momentJSON(h, at: last.t)
+        var out = momentJSON(h, at: last.t, src)
         out["sampleAgeSeconds"] = Int((now - last.t) / 1000)
         return out
 
     case "list_events":
         let (from, to) = try range(args, defaultFrom: "-24h", now: now)
-        let h = store.load(from: from, to: to, maxPoints: 10)
-        let names = Dictionary(store.knownVMs().map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
+        let h = try src.load(from, to, 10)
+        let names = Dictionary(src.knownVMs().map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
         // The process list is repeated only when it actually changed, or after ten minutes.
         var lastSignature: String?, lastShown: Int64 = 0
         let events = h.events.suffix(300).map { e -> [String: Any] in
@@ -270,12 +397,12 @@ func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
 
     case "summarize":
         let (from, to) = try range(args, defaultFrom: "-1h", now: now)
-        return Diagnostics.summary(store.load(from: from, to: to, maxPoints: analysisPoints(from, to)))
+        return Diagnostics.summary(try src.load(from, to, analysisPoints(from, to)))
 
     case "get_moment":
         let t = try parseTime(args["time"], now: now)
-        let h = store.load(from: t - 300_000, to: t + 300_000, maxPoints: nil)
-        var out = momentJSON(h, at: t)
+        let h = try src.load(t - 300_000, t + 300_000, nil)
+        var out = momentJSON(h, at: t, src)
         let names = Dictionary(h.vms.map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
         out["eventsWithinFiveMinutes"] = h.events.map { eventJSON($0, names: names) }
         return out
@@ -285,7 +412,7 @@ func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
         guard let target = args["vm"] as? String else { throw ToolError(message: "\"vm\" is required") }
         let (from, to) = try range(args, defaultFrom: "-1h", now: now)
         let points = min(500, max(10, (args["points"] as? Int) ?? 120))
-        let h = store.load(from: from, to: to, maxPoints: points)
+        let h = try src.load(from, to, points)
         var out: [String: Any] = ["metric": metric, "from": iso(from), "to": iso(to), "pointSeconds": Int(h.bucketMs / 1000)]
         if metric == "ping" {
             let key: String
@@ -295,7 +422,7 @@ func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
             case let address where h.probes[ProbeTarget.anchor(address)] != nil: key = ProbeTarget.anchor(address)
             default:
                 guard let vm = h.vms.first(where: { $0.name.caseInsensitiveCompare(target) == .orderedSame }) else {
-                    throw ToolError(message: "No VM named \"\(target)\" in this range. Known: \(store.knownVMs().map(\.name).joined(separator: ", ")), router, internet.")
+                    throw ToolError(message: "No VM named \"\(target)\" in this range. Known: \(src.knownVMs().map(\.name).joined(separator: ", ")), router, internet.")
                 }
                 key = ProbeTarget.vm(vm.key)
             }
@@ -309,7 +436,7 @@ func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
             return out
         }
         guard let vm = h.vms.first(where: { $0.name.caseInsensitiveCompare(target) == .orderedSame }) else {
-            throw ToolError(message: "No VM named \"\(target)\" has data in this range. Known VMs: \(store.knownVMs().map(\.name).joined(separator: ", ")).")
+            throw ToolError(message: "No VM named \"\(target)\" has data in this range. Known VMs: \(src.knownVMs().map(\.name).joined(separator: ", ")).")
         }
         let pick: (VMPoint) -> (Double?, Double?)
         switch metric {
@@ -333,7 +460,7 @@ func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
 
     case "find_incidents":
         let (from, to) = try range(args, defaultFrom: "-24h", now: now)
-        let h = store.load(from: from, to: to, maxPoints: analysisPoints(from, to))
+        let h = try src.load(from, to, analysisPoints(from, to))
         let names = Dictionary(h.vms.map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
         let incidents = Diagnostics.incidents(h).map { i -> [String: Any] in
             var d: [String: Any] = [
@@ -365,7 +492,7 @@ func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
         } else {
             out["recordedCoverage"] = "no samples recorded in this range"
         }
-        if incidents.isEmpty { out["conclusion"] = "Nothing abnormal was recorded on this Mac, its link or its uplink in this range." }
+        if incidents.isEmpty { out["conclusion"] = "Nothing abnormal was recorded on \(src.mac ?? "this Mac"), its link or its uplink in this range." }
         return out
 
     default:
@@ -387,12 +514,13 @@ while let line = readLine(strippingNewline: true) {
             "protocolVersion": (params["protocolVersion"] as? String) ?? "2025-06-18",
             "capabilities": ["tools": [String: Any]()],
             "serverInfo": ["name": "utm-watch", "version": serverVersion],
-            "instructions": "Read-only access to UTM Watch's recorded history on this Mac: per-VM CPU, memory, network, disk and ping, host memory and CPU, network link quality, and timeline events. When someone reports slowness without a time, call find_incidents first, then get_moment or summarize on what it returns.",
+            "instructions": "Read-only access to UTM Watch's recorded history on this Mac: per-VM CPU, memory, network, disk and ping, host memory and CPU, network link quality, and timeline events. When someone reports slowness without a time, call find_incidents first, then get_moment or summarize on what it returns."
+                + (fleet == nil ? "" : " This Mac can also read its fleet: list_macs shows every Mac, and each tool takes \"mac\" to look at another one."),
         ])
     case "ping":
         reply(id, [:])
     case "tools/list":
-        reply(id, ["tools": tools])
+        reply(id, ["tools": offeredTools])
     case "tools/call":
         let name = params["name"] as? String ?? ""
         let args = params["arguments"] as? [String: Any] ?? [:]

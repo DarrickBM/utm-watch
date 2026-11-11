@@ -8,6 +8,7 @@ import UTMWatchCore
 final class StatusItemController: NSObject {
     var onOpenDetails: (() -> Void)?
     var onOpenSettings: (() -> Void)?
+    var onOpenFleet: (() -> Void)?
 
     private let model: AppModel
     private let settings: AppSettings
@@ -120,6 +121,7 @@ final class StatusItemController: NSObject {
             menu.addItem(.separator())
         }
         menu.addItem(withTitle: "Open UTM Watch", action: #selector(openDetails), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Open Fleet", action: #selector(openFleet), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         if updater.currentVersion != nil {
             menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
@@ -134,6 +136,7 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func openDetails() { onOpenDetails?() }
+    @objc private func openFleet() { onOpenFleet?() }
     @objc private func installUpdate() { updater.install() }
     @objc private func checkForUpdates() { updater.checkManually() }
     @objc private func openSettings() { onOpenSettings?() }

@@ -6,7 +6,9 @@ import UTMWatchStore
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var model: AppModel
+    @ObservedObject var fleet: FleetController
     var onClearData: () -> Void
+    var onOpenFleet: () -> Void = {}
 
     @State private var copied = false
     private var connectCommand: String {
@@ -47,7 +49,13 @@ struct SettingsView: View {
                 Picker("Network units", selection: $settings.rateUnits) {
                     Text("MB/s").tag(RateUnits.bytes); Text("Mbps").tag(RateUnits.bits)
                 }.pickerStyle(.segmented)
+                Toggle(isOn: $settings.showOtherVMs) {
+                    Text("Show VMs from other apps")
+                    Text("Docker Desktop, Tart and others. Their memory counts on this Mac either way.")
+                }
             }
+
+            FleetSettingsSection(fleet: fleet, settings: settings, onOpenFleet: onOpenFleet)
 
             Section {
                 Picker("Keep history for", selection: $settings.retentionDays) {
@@ -118,8 +126,8 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear { loadStats() }
-        .frame(width: 520)
-        .fixedSize(horizontal: false, vertical: true)
+        // A fixed height with the form scrolling inside: the Fleet section grows and shrinks with its state.
+        .frame(width: 560, height: 720)
     }
 
     private func status(_ ok: Bool, _ text: String) -> some View {

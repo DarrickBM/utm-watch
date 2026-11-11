@@ -1,5 +1,5 @@
 import Foundation
-import UTMWatchCore
+import UTMWatchModel
 
 /// A period where some signal was outside its normal range.
 public struct Incident: Equatable {

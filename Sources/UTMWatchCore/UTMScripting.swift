@@ -36,6 +36,7 @@ public enum UTMScripting {
     }
 
     public static func list(timeout: TimeInterval = 8) -> Result<[UTMListedVM], UTMScriptingError> {
+        if UTMBundles.disabled { return .success([]) }
         let result = Shell.run("/usr/bin/osascript", ["-l", "JavaScript", "-e", script], timeout: timeout)
         if result.timedOut { return .failure(.failed("timed out, answer the Automation prompt if one is showing")) }
         let out = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)

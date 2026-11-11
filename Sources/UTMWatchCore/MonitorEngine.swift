@@ -20,6 +20,7 @@ public final class MonitorEngine {
     private let rateTracker = InterfaceRateTracker()
     private var knownPids: Set<Int32> = []
     private var pidBundle: [Int32: String] = [:]          // pid -> bundle path
+    private var pidOtherApp: [Int32: String] = [:]        // pid -> app that owns a VM outside UTM
     private var bundles: [String: UTMBundle] = [:]        // bundle path -> config
     private var macToInterface: [String: String] = [:]
     private var utmList: [UTMListedVM]?
@@ -138,9 +139,11 @@ public final class MonitorEngine {
         let pids = Set(procs.map(\.pid))
         if pids != knownPids {
             for pid in pids.subtracting(knownPids) {
-                if let url = ProcessVMMatcher.bundleURL(pid: pid) { pidBundle[pid] = url.path }
+                let open = ProcessVMMatcher.openPaths(pid: pid)
+                if let url = ProcessVMMatcher.bundleURL(fromOpenPaths: open) { pidBundle[pid] = url.path }
+                else if let app = ProcessVMMatcher.otherApp(fromOpenPaths: open) { pidOtherApp[pid] = app }
             }
-            for pid in knownPids.subtracting(pids) { pidBundle[pid] = nil }
+            for pid in knownPids.subtracting(pids) { pidBundle[pid] = nil; pidOtherApp[pid] = nil }
             knownPids = pids
             slowRequested = true // new VM: bridge table / UTM status need a fresh look
         }
@@ -174,10 +177,12 @@ public final class MonitorEngine {
         var vmFootprints: UInt64 = 0
         var configPending: [String] = []
         var newTargets: [(key: String, name: String, macs: [String])] = []
+        // Two VMs of the same other app (two Tart VMs, say) need the PID to tell them apart.
+        let otherAppCounts = Dictionary(procs.compactMap { pidOtherApp[$0.pid] }.map { ($0, 1) }, uniquingKeysWith: +)
         for proc in procs {
             let u = usage[proc.pid]
-            vmFootprints &+= u?.footprint ?? 0
             if let path = pidBundle[proc.pid] {
+                vmFootprints &+= u?.footprint ?? 0
                 // Until config.plist has been read, show the bundle's folder name without limits.
                 let b = bundles[path] ?? Self.placeholderBundle(path: path, backend: proc.backend)
                 if bundles[path] == nil { configPending.append(b.name) }
@@ -204,7 +209,15 @@ public final class MonitorEngine {
                 row.residentBytes = u?.resident
                 rows.append(row)
             } else {
-                var row = VMRow(id: "pid:\(proc.pid)", name: "Unidentified VM (PID \(proc.pid))",
+                // Not a UTM VM. Its memory is left out of `vmFootprints`, so it counts as other use of
+                // this Mac: it has no configured limit that the allocatable figure could reserve for it.
+                let name: String
+                if let app = pidOtherApp[proc.pid] {
+                    name = otherAppCounts[app, default: 1] > 1 ? "\(app) (PID \(proc.pid))" : app
+                } else {
+                    name = "Unidentified VM (PID \(proc.pid))"
+                }
+                var row = VMRow(id: "pid:\(proc.pid)", name: name,
                                 backend: proc.backend, status: .running, pid: proc.pid, identified: false,
                                 cpuCores: u?.cpuCores, memoryBytes: u?.footprint)
                 row.diskReadRate = u?.diskReadRate

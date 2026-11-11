@@ -1,7 +1,7 @@
 import Foundation
-import UTMWatchCore
+import UTMWatchModel
 
-public struct VMInfo: Equatable {
+public struct VMInfo: Equatable, Codable {
     public var key: String
     public var name: String
     public var backend: String
@@ -9,7 +9,7 @@ public struct VMInfo: Equatable {
 }
 
 /// A VM's configured limits from a point in time onwards.
-public struct VMConfig: Equatable {
+public struct VMConfig: Equatable, Codable {
     public var ts: Int64
     public var cores: Int?
     public var memBytes: Double?
@@ -17,7 +17,7 @@ public struct VMConfig: Equatable {
 }
 
 /// One point of a VM's history: a raw sample, or the average (and peak) of a bucket of samples.
-public struct VMPoint: Equatable {
+public struct VMPoint: Equatable, Codable {
     public var t: Int64            // milliseconds since 1970
     public var cpu: Double?        // cores
     public var cpuMax: Double?
@@ -47,7 +47,7 @@ public struct VMPoint: Equatable {
     }
 }
 
-public struct HostPoint: Equatable {
+public struct HostPoint: Equatable, Codable {
     public var t: Int64
     public var used: Double
     public var other: Double
@@ -77,7 +77,7 @@ public struct HostPoint: Equatable {
     }
 }
 
-public struct HistoryEvent: Equatable {
+public struct HistoryEvent: Equatable, Codable {
     public var ts: Int64
     public var kind: String
     public var vmKey: String?
@@ -93,7 +93,7 @@ public struct HistoryEvent: Equatable {
 }
 
 /// Ping results for one target: a single probe, or a bucket of them.
-public struct ProbePoint: Equatable {
+public struct ProbePoint: Equatable, Codable {
     public var t: Int64
     /// Average round-trip time in ms over the replies received; nil if none came back.
     public var rtt: Double?
@@ -105,7 +105,7 @@ public struct ProbePoint: Equatable {
     }
 }
 
-public struct LinkPoint: Equatable {
+public struct LinkPoint: Equatable, Codable {
     public var t: Int64
     public var kind: String
     public var interface: String?
@@ -135,7 +135,7 @@ public enum ProbeTarget {
 }
 
 /// Everything the detail window needs for one time frame.
-public struct History: Equatable {
+public struct History: Equatable, Codable {
     public var from: Int64
     public var to: Int64
     public var vms: [VMInfo] = []

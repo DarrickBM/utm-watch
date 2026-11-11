@@ -27,6 +27,12 @@ struct CLIOptions {
       --log <path>         Append collector errors to this file
       -h, --help           Show this help
 
+    FLEET (several Macs reporting to one hub):
+      utmwatch fleet enroll --hub <url> --code <pairing code> [--name <name>]
+      utmwatch fleet view --hub <url> --token <reader token>
+      utmwatch fleet status
+      utmwatch fleet leave
+
     KEYS (interactive):
       1 2 5  refresh interval      s  cycle sort (name, cpu, mem, net)
       h      hide/show stopped     u  toggle MB/s / Mbps

@@ -9,12 +9,29 @@ struct DetailView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var detail: DetailModel
     var onSettings: () -> Void
+    /// Set when the window shows another Mac of the fleet instead of this one.
+    var remote: RemoteMac? = nil
+
+    struct RemoteMac {
+        var name: String
+        /// "online", "offline" or "asleep".
+        var state: String
+        var onBack: () -> Void
+    }
+
+    /// VM order decides the colors. This Mac keeps the order it first saw them in; another Mac's comes with its history.
+    private var order: [String] { remote == nil ? model.ring.order : detail.history.vms.map(\.key) }
 
     private var readout: Readout? {
-        let order = model.ring.order
+        let order = self.order
         if let t = detail.readoutTime {
             let kind = detail.pin != nil ? "Pinned moment" : (detail.hover != nil ? "Under cursor" : "End of range")
             return Readout.at(t, kind: kind, history: detail.history, order: order, units: settings.rateUnits)
+        }
+        if let remote {
+            // Another Mac has no live feed here: "now" is the newest sample the hub holds for it.
+            guard let last = detail.history.host.last else { return nil }
+            return Readout.at(Date(ms: last.t), kind: "Latest from \(remote.name)", history: detail.history, order: order, units: settings.rateUnits)
         }
         return model.snapshot.map { Readout.now(snapshot: $0, link: model.link, probes: model.ring.probes, order: order, units: settings.rateUnits) }
     }
@@ -32,14 +49,15 @@ struct DetailView: View {
                 Divider()
                 chipsRow(readout).padding(.top, 10).padding(.bottom, 10)
                 GeometryReader { geo in
-                    TracksView(history: detail.history, order: model.ring.order, units: settings.rateUnits,
-                               readout: detail.readoutTime?.msSince1970, pin: detail.pin?.msSince1970, hover: detail.hover?.msSince1970,
+                    TracksView(history: detail.history, order: order, units: settings.rateUnits,
+                               // Another Mac's newest sample is a few seconds old; read the tracks there, not at this Mac's "now".
+                               readout: detail.readoutTime?.msSince1970 ?? (remote == nil ? nil : detail.history.host.last?.t), pin: detail.pin?.msSince1970, hover: detail.hover?.msSince1970,
                                onHover: { ms in
                                    let d = ms.map { Date(ms: $0) }
                                    if d != detail.hover { detail.hover = d }
                                },
                                onPin: { detail.pin = Date(ms: $0) },
-                               availableHeight: geo.size.height, focus: detail.focus)
+                               availableHeight: geo.size.height, focus: detail.focus, hostName: remote?.name ?? "This Mac")
                 }
                 .frame(minHeight: 380)
             }
@@ -57,6 +75,15 @@ struct DetailView: View {
 
     private var toolbar: some View {
         HStack(spacing: 12) {
+            if let remote {
+                Button { remote.onBack() } label: { Label("Fleet", systemImage: "chevron.left") }.help("Back to all Macs").fixedSize()
+                HStack(spacing: 6) {
+                    Circle().fill(remote.state == "online" ? Color.green : Color.secondary).frame(width: 8, height: 8)
+                        .help(remote.state == "online" ? "Online" : remote.state == "asleep" ? "Asleep" : "Offline")
+                    Text(remote.name).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                }
+                .frame(maxWidth: 170, alignment: .leading).layoutPriority(1)
+            }
             Picker("Time frame", selection: Binding(get: { detail.lengthSeconds }, set: { detail.select(length: $0) })) {
                 ForEach(DetailModel.lengths, id: \.seconds) { Text($0.label).tag($0.seconds) }
             }
@@ -69,7 +96,8 @@ struct DetailView: View {
             }
 
             HStack(spacing: 6) {
-                Text("Jump to").foregroundStyle(.secondary).fixedSize()
+                // The fleet window's toolbar also carries the Mac's name, so the label gives way there.
+                if remote == nil { Text("Jump to").foregroundStyle(.secondary).fixedSize() }
                 DatePicker("Jump to", selection: Binding(get: { detail.pin ?? detail.frameEnd }, set: { detail.jump(to: $0) }),
                            in: ...Date(), displayedComponents: [.date, .hourAndMinute])
                     .labelsHidden().datePickerStyle(.compact)
@@ -116,13 +144,14 @@ struct DetailView: View {
             Spacer(minLength: 8)
             // Reserved even when nothing is pinned, so pinning does not move the layout.
             HStack(spacing: 6) {
-                Button(promptCopied ? "Prompt copied" : "Ask AI about this moment") {
+                // The copied question is about "this Mac"; for another Mac it would send the agent to the wrong one.
+                if remote == nil { Button(promptCopied ? "Prompt copied" : "Ask AI about this moment") {
                     guard let pin = detail.pin else { return }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(Self.prompt(for: pin), forType: .string)
                     promptCopied = true
                 }
-                .help("Copies a question you can paste to an AI agent connected to UTM Watch")
+                .help("Copies a question you can paste to an AI agent connected to UTM Watch") }
                 Button("Unpin") { detail.pin = nil }.help("Esc")
             }
             .opacity(detail.pin == nil ? 0 : 1).disabled(detail.pin == nil)
@@ -265,7 +294,7 @@ struct DetailView: View {
                 .help(selected ? "Click to show all VMs again. Total ↓ / ↑ since it started: \(row.total)"
                                : "Click to show only this VM in the tracks. Total ↓ / ↑ since it started: \(row.total)")
                 .accessibilityLabel("\(row.name), \(row.state). \(selected ? "Focused. Click to show all VMs." : "Click to focus this VM in the tracks.")")
-                if hoveredChip == row.id {
+                if hoveredChip == row.id, remote == nil {
                     Button {
                         renameDraft = row.name
                         renaming = row.id
@@ -330,6 +359,7 @@ struct DetailView: View {
     }
 
     private var storageText: String {
+        if let remote { return "From the hub · full detail for the last 48 hours, 1-minute averages for 90 days · names are changed on \(remote.name)" }
         guard model.store != nil else { return "History recording is unavailable" }
         guard let s = detail.stats, let oldest = s.oldest else { return "Recording started; no history yet" }
         let f = DateFormatter(); f.dateFormat = "EEE d MMM, HH:mm"

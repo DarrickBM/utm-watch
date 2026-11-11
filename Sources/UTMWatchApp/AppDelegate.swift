@@ -2,12 +2,15 @@ import AppKit
 import Combine
 import SwiftUI
 import UTMWatchCore
+import UTMWatchFleet
 import UTMWatchStore
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let settings = AppSettings()
     lazy var model = AppModel(settings: settings)
     lazy var updater = Updater(settings: settings)
+    lazy var fleet = FleetController(settings: settings, model: model)
+    private var fleetWindow: NSWindow?
     private var sampler: Sampler!
     private var statusItem: StatusItemController!
     private var detailWindow: NSWindow?
@@ -26,7 +29,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = StatusItemController(model: model, settings: settings, updater: updater, debug: debug)
         statusItem.onOpenDetails = { [weak self] in self?.showDetails() }
         statusItem.onOpenSettings = { [weak self] in self?.showSettings() }
+        statusItem.onOpenFleet = { [weak self] in self?.showFleet() }
         model.attachStore()
+        // Fleet: does nothing unless this Mac has joined a fleet or hosts a hub.
+        fleet.start()
+        // Debug aid: `--fleet-join <pairing code>` joins a fleet at launch, as pasting the code into Settings would.
+        if let i = CommandLine.arguments.firstIndex(of: "--fleet-join"), i + 1 < CommandLine.arguments.count {
+            let name = CommandLine.arguments.firstIndex(of: "--fleet-name").flatMap { $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1] : nil }
+            fleet.join(code: CommandLine.arguments[i + 1], name: name ?? "")
+        }
         detail = DetailModel(model: model, settings: settings)
         sampler = Sampler(model: model)
         // Retention: prune at launch, hourly, and whenever the setting changes.
@@ -53,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if CommandLine.arguments.contains("--light") { NSApp.appearance = NSAppearance(named: .aqua) }
         runDebugSnapshotIfRequested()
         runDebugViewSnapshots()
+        runDebugFleetSnapshot()
         updater.start()
         // Debug aid: `--update-now` installs a newer release without a click, so the update path can be tested.
         if CommandLine.arguments.contains("--update-now") {
@@ -112,13 +124,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 .background(Color(nsColor: .windowBackgroundColor)), to: p)
         }
         if let p = path("--snapshot-settings") {
-            capture(SettingsView(settings: settings, model: model, onClearData: {}), to: p)
+            capture(SettingsView(settings: settings, model: model, fleet: fleet, onClearData: {}), to: p)
         }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {
+        fleet.shutdown() // the hub and the network helper must not outlive the app
         model.flush(wait: true) // do not lose the last few seconds
     }
 
@@ -162,6 +175,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         if (notification.object as? NSWindow) === detailWindow { detail.isActive = false }
+        if (notification.object as? NSWindow) === fleetWindow {
+            fleet.viewActive = false
+            fleet.remoteDetail.isActive = false
+        }
+    }
+
+    private func showFleet() {
+        if fleetWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            w.title = "UTM Watch Fleet"
+            w.isReleasedWhenClosed = false
+            w.delegate = self
+            w.contentView = NSHostingView(rootView: FleetWindowView(fleet: fleet, settings: settings, onSettings: { [weak self] in self?.showSettings() }))
+            w.contentMinSize = NSSize(width: 1180, height: 720)
+            w.center()
+            w.setFrameAutosaveName("UTMWatchFleet")
+            fleetWindow = w
+        }
+        fleet.viewActive = true
+        if fleet.selected != nil { fleet.remoteDetail.isActive = true }
+        NSApp.activate(ignoringOtherApps: true)
+        fleetWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Debug aid: `--snapshot-fleet <png>` opens the fleet window and writes a picture of it after `--snapshot-delay` seconds.
+    /// `--snapshot-fleet-host <name>` first drills into that Mac.
+    private func runDebugFleetSnapshot() {
+        let args = CommandLine.arguments
+        func value(_ flag: String) -> String? { args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+        guard let path = value("--snapshot-fleet") else { return }
+        let delay = value("--snapshot-delay").flatMap(Double.init) ?? 8
+        showFleet()
+        if let name = value("--snapshot-fleet-host") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay / 2) { [weak self] in
+                guard let self, let host = self.fleet.hosts.first(where: { $0.name == name }) else { return }
+                self.fleet.select(host.uuid)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let view = self?.fleetWindow?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            FileLog.shared.log("snapshot written to \(path)")
+        }
     }
 
     private func showSettings() {
@@ -170,11 +228,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
             w.title = "UTM Watch Settings"
             w.isReleasedWhenClosed = false
-            w.contentView = NSHostingView(rootView: SettingsView(settings: settings, model: model, onClearData: { [weak self] in
+            w.contentView = NSHostingView(rootView: SettingsView(settings: settings, model: model, fleet: fleet, onClearData: { [weak self] in
                 self?.model.clearHistory()
                 self?.detail.refresh(force: true)
                 self?.detail.refreshStats()
-            }))
+            }, onOpenFleet: { [weak self] in self?.showFleet() }))
             w.setContentSize(w.contentView?.fittingSize ?? w.frame.size)
             w.center()
             settingsWindow = w

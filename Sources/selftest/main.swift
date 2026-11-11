@@ -2,6 +2,7 @@
 // Run with `swift run selftest`; exits non-zero on the first group with failures.
 import Foundation
 import UTMWatchCore
+import UTMWatchFleet
 import UTMWatchStore
 
 var failures = 0
@@ -46,6 +47,10 @@ do {
     check(ProcessVMMatcher.utmBundlePath(fromOpenPath: path) == "/Users/d/Library/Containers/com.utmapp.UTM/Data/Documents/macOS 26 B.utm", "bundle path with spaces")
     check(ProcessVMMatcher.utmBundlePath(fromOpenPath: "/dev/null") == nil, "no bundle in /dev/null")
     check(ProcessVMMatcher.utmBundlePath(fromOpenPath: "/Users/d/notes.utm.txt") == nil, ".utm.txt is not a bundle")
+    check(ProcessVMMatcher.otherApp(fromOpenPath: "/Users/d/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw") == "Docker Desktop", "Docker Desktop's disk names its VM")
+    check(ProcessVMMatcher.otherApp(fromOpenPath: "/Users/d/.colima/_lima/colima/diffdisk") == "Colima", "Colima wins over the Lima folder it nests")
+    check(ProcessVMMatcher.otherApp(fromOpenPaths: ["/dev/null", "/Users/d/.tart/vms/sonoma/disk.img"]) == "Tart", "other app found among open paths")
+    check(ProcessVMMatcher.otherApp(fromOpenPath: "/Users/d/Projects/x/main.swift") == nil, "ordinary file names no app")
 
     check(ProcessScanner.isVMExecutable("/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"), "Apple VM helper detected")
     check(ProcessScanner.isVMExecutable("/Applications/UTM.app/Contents/Frameworks/qemu-system-aarch64"), "QEMU detected")
@@ -342,6 +347,218 @@ do {
     let sums = String(repeating: "a", count: 64) + "  UTMWatch-0.5.0-macos-arm64.dmg\n" + String(repeating: "B", count: 64) + "  UTMWatch-0.5.0-macos-arm64.zip\n"
     check(ReleaseInfo.checksum(for: "UTMWatch-0.5.0-macos-arm64.zip", in: sums) == String(repeating: "b", count: 64), "checksum found by file name")
     check(ReleaseInfo.checksum(for: "other.zip", in: sums) == nil, "no checksum for an unlisted file")
+}
+
+// MARK: Fleet hub
+do {
+    check(SHA256.hex(Array("abc".utf8)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256 of a short message")
+    check(SHA256.hex(Array(String(repeating: "a", count: 200).utf8)) == "c2a908d98f5df987ade41b5fce213067efbcc21ef2240212a41e54b5e7c28ae5", "SHA-256 across several blocks")
+
+    let dir = NSTemporaryDirectory() + "utmwatch-fleet-\(ProcessInfo.processInfo.processIdentifier)/"
+    try? FileManager.default.removeItem(atPath: dir)
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    let gb: UInt64 = 1 << 30
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+    let t0 = start.msSince1970, t1 = t0 + 600_000
+    func snap(_ i: Int, cpu: Double = 1.0, bRunning: Bool = true) -> Snapshot {
+        var rows = [VMRow(id: "/Users/me/A.utm", name: "macOS 26", backend: .apple, status: .running, pid: 10, identified: true, isMacOS: true,
+                          cpuCores: cpu + Double(i % 5) * 0.1, cpuAllocated: 6, memoryBytes: 7 * gb, memoryAllocatedBytes: 8 * gb,
+                          downRate: 1000, upRate: 500, downTotal: UInt64(i) * 2000, upTotal: UInt64(i) * 1000)]
+        rows[0].residentBytes = 3 * gb
+        if bRunning {
+            rows.append(VMRow(id: "/Users/me/B.utm", name: "Build box", backend: .qemu, status: .running, pid: 11, identified: true,
+                              cpuCores: 0.5, cpuAllocated: 4, memoryBytes: 2 * gb, memoryAllocatedBytes: i < 100 ? 4 * gb : 8 * gb))
+        }
+        let host = HostSummary(totalMemory: 48 * gb, hostUsed: 40 * gb, hostOtherUsed: 24 * gb, freeNow: 8 * gb, allocatable: 8 * gb,
+                               pressure: i % 90 == 7 ? .warning : .normal, swapUsed: gb, swapTotal: 4 * gb, physicalCores: 14, allocatedCores: 10, macOSRunning: 1)
+        return Snapshot(timestamp: start.addingTimeInterval(Double(i) * 2), intervalSeconds: 2, rows: rows, host: host, notices: [])
+    }
+    func probe(_ i: Int) -> ProbeResult {
+        var link = LinkInfo(kind: "wifi", interface: "en1"); link.rssi = -60 - i % 7; link.noise = -90; link.txRateMbps = 600; link.channel = 44
+        return ProbeResult(timestamp: start.addingTimeInterval(Double(i) * 10 + 1), vmPing: ["/Users/me/A.utm": 0.4 + Double(i % 3), "/Users/me/B.utm": i % 9 == 0 ? nil : 0.7],
+                           gatewayTried: true, gatewayMs: 2.5, internetTried: true, internetMs: 14, link: link, anchorMs: ["1.1.1.1": 14, "223.5.5.5": nil])
+    }
+    /// Uploads everything a local store holds, the way the agent does: slice by slice until nothing is left.
+    func drain(_ local: HistoryStore, to service: HubService, token: String, from cursor: UploadCursor, sliceMs: Int64 = 300_000, twice: Bool = false) -> UploadCursor {
+        var c = cursor
+        for _ in 0..<1000 {
+            var batch = local.exportBatch(after: c, limitMs: sliceMs)
+            if batch.hasNoHistory { break }
+            batch.sentAt = t1; batch.appVersion = "9.9.9"
+            for _ in 0..<(twice ? 2 : 1) {
+                let r = service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: token, body: FleetAPI.encode(batch)))
+                guard r.status == 200, let reply = FleetAPI.decode(FleetReply<IngestReply>.self, from: r.body)?.data else { check(false, "ingest accepted"); return c }
+                c = reply.accepted
+            }
+        }
+        return c
+    }
+    func get<T: Codable>(_ service: HubService, _ path: String, _ query: [String: String] = [:], token: String?, as: T.Type) -> (Int, T?) {
+        let r = service.handle(HubRequest(method: "GET", path: path, query: query, bearer: token))
+        return (r.status, FleetAPI.decode(FleetReply<T>.self, from: r.body)?.data)
+    }
+
+    if let hub = try? HubStore(path: dir + "hub.sqlite"), let macA = try? HistoryStore(path: dir + "a.sqlite"), let macB = try? HistoryStore(path: dir + "b.sqlite") {
+        var clock = t1
+        let service = HubService(store: hub, now: { clock })
+        let reader = hub.createReaderToken(label: "test", now: clock)
+
+        // Enrolment
+        func enroll(_ uuid: String, _ name: String, code: String) -> (Int, String?) {
+            let r = service.handle(HubRequest(method: "POST", path: "/v1/enroll", bearer: code,
+                                              body: FleetAPI.encode(EnrollRequest(hostUUID: uuid, name: name, appVersion: "9.9.9"))))
+            return (r.status, FleetAPI.decode(FleetReply<EnrollReply>.self, from: r.body)?.data?.hostToken)
+        }
+        let code = hub.createEnrollToken(now: clock)
+        let (s1, tokenA) = enroll("uuid-a", "Mini A", code: code)
+        check(s1 == 200 && tokenA != nil, "a Mac enrols with a pairing code")
+        check(enroll("uuid-x", "Mini X", code: code).0 == 401, "a pairing code works once")
+        check(enroll("uuid-x", "Mini X", code: "e_wrong").0 == 401, "an unknown pairing code is refused")
+        let expired = hub.createEnrollToken(now: clock - 2 * 86_400_000)
+        check(enroll("uuid-x", "Mini X", code: expired).0 == 401, "an expired pairing code is refused")
+        let tokenB = enroll("uuid-b", "Mini B", code: hub.createEnrollToken(now: clock)).1 ?? ""
+
+        // Mac A: ten minutes of history written the way the app writes it, with one late event.
+        let snaps = (0..<300).map { snap($0, bRunning: !(120..<150).contains($0)) }
+        let probes = (0..<60).map(probe)
+        macA.write(snapshots: Array(snaps[0..<150]), events: [HistoryEvent(ts: t0 + 5000, kind: "vm_started", vmKey: "/Users/me/B.utm", label: "Build box started")],
+                   probes: Array(probes[0..<30]))
+        var cursorA = drain(macA, to: service, token: tokenA ?? "", from: macA.uploadCursor(startingAt: t0), sliceMs: 70_000, twice: true)
+        macA.write(snapshots: Array(snaps[150...]), events: [HistoryEvent(ts: t0 + 9000, kind: "cpu_limit", vmKey: nil, label: "late, with an old time", detail: #"{"top":[]}"#)],
+                   probes: Array(probes[30...]))
+        cursorA = drain(macA, to: service, token: tokenA ?? "", from: cursorA, sliceMs: 70_000)
+        // Mac B: the same VM paths, different numbers.
+        macB.write(snapshots: (0..<300).map { snap($0, cpu: 3.0) }, probes: probes)
+        _ = drain(macB, to: service, token: tokenB, from: macB.uploadCursor(startingAt: t0))
+
+        let localRaw = macA.load(from: t0, to: t1, maxPoints: nil)
+        let hubRaw = hub.load(hostUUID: "uuid-a", from: t0, to: t1, maxPoints: nil)
+        check(localRaw.series["/Users/me/A.utm"]?.count == 300 && localRaw.probes.count == 6, "the local history under test is not empty")
+        check(hubRaw == localRaw, "the hub returns a Mac's raw history exactly as that Mac reads it")
+        check(hub.load(hostUUID: "uuid-a", from: t0, to: t1, maxPoints: 50) == macA.load(from: t0, to: t1, maxPoints: 50), "bucketed history matches too")
+        let localLong = macA.load(from: t0 - 3 * 3600_000, to: t1, maxPoints: 600)
+        check(localLong.series["/Users/me/A.utm"]?.count == 9, "the local store rolled up nine completed minutes")
+        check(hub.load(hostUUID: "uuid-a", from: t0 - 3 * 3600_000, to: t1, maxPoints: 600) == localLong,
+              "rollups match after an upload in slices that end mid-minute")
+        check(hubRaw?.events.map(\.kind) == ["vm_started", "cpu_limit"], "an event written late with an old time still reaches the hub")
+        check(hubRaw?.events.count == 2, "sending a batch twice stores nothing twice")
+        check(hubRaw?.configs["/Users/me/B.utm"]?.count == 2, "a changed limit is kept alongside the earlier one")
+
+        let hubB = hub.load(hostUUID: "uuid-b", from: t0, to: t1, maxPoints: nil)
+        check(hubB == macB.load(from: t0, to: t1, maxPoints: nil), "a second Mac with the same VM paths keeps its own history")
+        check(near(hubB?.series["/Users/me/A.utm"]?.first?.cpu ?? 0, 3.0) && near(hubRaw?.series["/Users/me/A.utm"]?.first?.cpu ?? 0, 1.0), "the two Macs' VMs are not mixed up")
+        check(hub.load(hostUUID: "uuid-nobody", from: t0, to: t1, maxPoints: nil) == nil, "an unknown Mac has no history")
+
+        // A first upload that starts part-way carries nothing older, and still carries the limit in force.
+        let late = macA.exportBatch(after: macA.uploadCursor(startingAt: t0 + 300_000), limitMs: 60_000)
+        check(late.host.first?.first == Double(t0 + 300_000) && late.events.isEmpty, "a first upload starts where it was told to and skips older events")
+        check(late.configs.contains { $0.ts < t0 + 300_000 }, "a slice carries the limit that was already in force when it began")
+        macA.setUploadCursor(cursorA)
+        check(macA.uploadCursor() == cursorA && macA.exportBatch(after: cursorA).hasNoHistory, "the cursor is saved and nothing is left to send")
+
+        // Read API
+        var live = IngestBatch(cursor: cursorA)
+        live.sentAt = clock - 7000; live.appVersion = "9.9.9"; live.snapshot = snaps.last; live.linkNow = probes.last?.link
+        check(service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: tokenA, body: FleetAPI.encode(live))).status == 200, "a batch with only the current state is accepted")
+        clock += 90_000
+        _ = service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: tokenB, body: FleetAPI.encode(IngestBatch(cursor: UploadCursor()))))
+        let (hs, hosts) = get(service, "/v1/hosts", token: reader, as: [HostStatus].self)
+        check(hs == 200 && hosts?.map(\.name) == ["Mini A", "Mini B"], "the fleet lists both Macs")
+        check(hosts?.first?.state == "offline" && hosts?.last?.state == "online", "a Mac silent for over a minute is offline, by the hub's clock")
+        check(hosts?.first?.snapshot == snaps.last && hosts?.first?.link?.channel == 44 && hosts?.first?.skewMs == 7000, "the overview carries the latest state and the clock skew")
+        let (hh, history) = get(service, "/v1/hosts/uuid-a/history", ["from": "\(t0)", "to": "\(t1)", "maxPoints": "50"], token: reader, as: History.self)
+        check(hh == 200 && history == macA.load(from: t0, to: t1, maxPoints: 50), "history survives the trip through JSON unchanged")
+        check(get(service, "/v1/hosts/uuid-a/history", ["from": "\(t0 - 86_400_000)", "to": "\(t1)"], token: reader, as: History.self).0 == 400, "a long frame without maxPoints is refused")
+        let (_, events) = get(service, "/v1/events", token: reader, as: [FleetEvent].self)
+        check(events?.count == 2 && events?.first?.hostName == "Mini A" && events?.first?.origin == "agent", "fleet events name their Mac")
+        check(get(service, "/v1/events", ["after": "\(events?.first?.id ?? 0)"], token: reader, as: [FleetEvent].self).1?.count == 1, "events can be polled from the last one seen")
+        check(get(service, "/v1/hosts/uuid-a/commands", token: tokenA, as: [String].self).1 == [], "the reserved command channel answers with nothing")
+
+        // Authorization
+        check(get(service, "/v1/hosts", token: nil, as: [HostStatus].self).0 == 401 && get(service, "/v1/hosts", token: tokenA, as: [HostStatus].self).0 == 401, "reading the fleet needs a reader token")
+        check(service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: reader, body: FleetAPI.encode(live))).status == 401, "a reader token cannot upload")
+        check(get(service, "/v1/health", token: nil, as: [String: Bool].self).0 == 200 && get(service, "/v2/health", token: nil, as: [String: Bool].self).0 == 404, "health is open; unknown paths are not found")
+        check(hub.revoke(hostUUID: "uuid-b") && !hub.revoke(hostUUID: "uuid-nobody"), "a Mac can be revoked")
+        check(service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: tokenB, body: FleetAPI.encode(live))).status == 401, "a revoked Mac can no longer upload")
+        check(hub.hosts(now: clock).map(\.uuid) == ["uuid-a"], "a revoked Mac leaves the fleet list")
+        // Pairing codes, the Mac's own reader token, and going offline on the timeline
+        let packed = PairingCode(hub: "http://mini.local:8787", token: "e_abc", authKey: "tskey-auth-x")
+        check(PairingCode(text: "  " + packed.text + "\n") == packed && PairingCode(text: "e_abc") == nil && PairingCode(text: "utmw1.!!") == nil, "a pairing code packs the hub, token and network key into one string")
+        let joined = service.handle(HubRequest(method: "POST", path: "/v1/enroll", bearer: hub.createEnrollToken(now: clock),
+                                               body: FleetAPI.encode(EnrollRequest(hostUUID: "uuid-d", name: "Mini D", appVersion: "9.9.9"))))
+        let joinedReply = FleetAPI.decode(FleetReply<EnrollReply>.self, from: joined.body)?.data
+        check(get(service, "/v1/hosts", token: joinedReply?.readerToken, as: [HostStatus].self).0 == 200, "a Mac that joins can read the fleet with its own reader token")
+        _ = service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: joinedReply?.hostToken, body: FleetAPI.encode(IngestBatch(cursor: UploadCursor()))))
+        check(hub.noteOfflineChanges(now: clock).filter { $0.hostUUID == "uuid-d" }.isEmpty, "a Mac that is reporting raises nothing")
+        let silent = hub.noteOfflineChanges(now: clock + 61_000).filter { $0.hostUUID == "uuid-d" }
+        check(silent.map(\.kind) == ["host_offline"] && silent.first?.origin == "hub" && silent.first?.label == "Mini D stopped reporting", "a Mac that goes silent is put on the timeline by the hub")
+        check(hub.noteOfflineChanges(now: clock + 70_000).isEmpty, "and only once")
+        var sleepy = IngestBatch(cursor: UploadCursor())
+        sleepy.sentAt = clock + 80_000; sleepy.events = [.init(ts: clock + 80_000, kind: "sleep", vmKey: nil, label: "Mac went to sleep", detail: nil)]
+        clock += 80_000
+        _ = service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: joinedReply?.hostToken, body: FleetAPI.encode(sleepy)))
+        check(hub.noteOfflineChanges(now: clock).filter { $0.hostUUID == "uuid-d" }.map(\.kind) == ["host_online"], "its return is noted too")
+        check(hub.noteOfflineChanges(now: clock + 61_000).filter { $0.hostUUID == "uuid-d" }.map(\.kind) == ["host_asleep"]
+              && hub.hosts(now: clock + 61_000).first { $0.uuid == "uuid-d" }?.state == "asleep", "a Mac that said it was going to sleep is asleep, not offline")
+        hub.revoke(hostUUID: "uuid-d")
+        check(get(service, "/v1/hosts", token: joinedReply?.readerToken, as: [HostStatus].self).0 == 401, "revoking a Mac takes away its view of the fleet")
+
+        let (s2, tokenA2) = enroll("uuid-a", "Mini A renamed", code: hub.createEnrollToken(now: clock))
+        check(s2 == 200 && hub.hostID(forToken: tokenA ?? "") == nil && hub.hostID(forToken: tokenA2 ?? "") != nil, "enrolling again replaces the Mac's token")
+        check(hub.load(hostUUID: "uuid-a", from: t0, to: t1, maxPoints: nil) == localRaw && hub.hosts(now: clock).first?.name == "Mini A renamed", "and keeps its history under the new name")
+
+        // The agent: uploads in rounds, survives an outage, and carries only recent history on its first upload.
+        if let macC = try? HistoryStore(path: dir + "c.sqlite") {
+            let tokenC = enroll("uuid-c", "Mini C", code: hub.createEnrollToken(now: clock)).1 ?? ""
+            let transport = InProcessTransport(service: service)
+            var agentClock = t0 + 400_000
+            let agent = Uploader(store: macC, client: HubClient(baseURL: "http://hub.test", transport: transport), token: tokenC, appVersion: "9.9.9",
+                                 backfillMs: 200_000, sliceMs: 45_000, now: { agentClock })
+            var seen: [Uploader.State] = []
+            agent.onStatus = { seen.append($0.state) }
+            macC.write(snapshots: (0..<200).map { snap($0) }, probes: (0..<40).map(probe))
+            agent.setLive(snapshot: snap(199))
+            check(agent.runOnce().state == .upToDate, "the first round sends everything it should")
+            let firstC = hub.load(hostUUID: "uuid-c", from: t0, to: t1, maxPoints: nil)
+            check(firstC?.host.first?.t == t0 + 200_000 && firstC?.host.count == 100, "a first upload carries the recent history only, not everything on the Mac")
+            check(hub.hosts(now: clock).first { $0.uuid == "uuid-c" }?.snapshot == snap(199), "each upload carries the Mac's current state")
+
+            transport.reachable = false
+            macC.write(snapshots: (200..<260).map { snap($0) }, probes: (40..<52).map(probe))
+            agentClock += 120_000
+            check(agent.runOnce().state == .unreachable && macC.uploadCursor()?.sampleTs == t0 + 398_000, "while the hub is down nothing is lost and the cursor stays put")
+            macC.write(snapshots: (260..<300).map { snap($0) }, probes: (52..<60).map(probe))
+            transport.reachable = true
+            agentClock += 80_000
+            check(agent.runOnce().state == .upToDate, "when the hub is back the Mac catches up")
+            check(hub.load(hostUUID: "uuid-c", from: t0 + 200_000, to: t1, maxPoints: nil) == macC.load(from: t0 + 200_000, to: t1, maxPoints: nil),
+                  "after an outage the hub holds the same history as the Mac, with no gap")
+            check(agent.runOnce(maxSlices: 1).state == .upToDate && seen == [.upToDate, .unreachable, .upToDate], "status changes are reported once each")
+
+            hub.revoke(hostUUID: "uuid-c")
+            var refused = false
+            if case .rejected = agent.runOnce().state { refused = true }
+            check(refused, "a revoked Mac is told it was refused")
+            macC.clear()
+            check(macC.uploadCursor() == nil, "clearing local history resets the upload position")
+        } else {
+            check(false, "agent store opens")
+        }
+
+        // Bad input and retention
+        var future = IngestBatch(cursor: UploadCursor())
+        future.host = [[Double(clock + 3600_000), 1, 1, 1, 0, 0, 0, 4, 1], [1e300, 1, 1, 1, 0, 0, 0, 4, 1], [1]]
+        future.samples = [[5, Double(t0), 1, 1, 1, 1, 1, 1, 1, 1, 1]]
+        check(service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: tokenA2, body: FleetAPI.encode(future))).status == 200, "an upload with unusable rows is still accepted")
+        check(hub.load(hostUUID: "uuid-a", from: t0, to: clock + 2 * 3600_000, maxPoints: nil)?.host.count == 300, "rows from the future, out of range or malformed are dropped")
+        check(service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: tokenA2, body: Data("{nonsense".utf8))).status == 400, "an unreadable upload is a bad request")
+        hub.prune(rawOlderThan: t0 + 300_000, rollupsOlderThan: t0 - 1)
+        check(hub.load(hostUUID: "uuid-a", from: t0, to: t1, maxPoints: nil)?.series["/Users/me/A.utm"]?.count == 150, "pruning removes old raw samples")
+        check(hub.load(hostUUID: "uuid-a", from: t0 - 3 * 3600_000, to: t1, maxPoints: 600)?.series["/Users/me/A.utm"]?.count == 9, "and keeps the rollups for longer")
+    } else {
+        check(false, "hub and local stores open")
+    }
+    try? FileManager.default.removeItem(atPath: dir)
 }
 
 print("\(checks - failures)/\(checks) checks passed")

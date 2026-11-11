@@ -1,5 +1,7 @@
+import Combine
 import Foundation
 import UTMWatchCore
+import UTMWatchFleet
 import UTMWatchStore
 
 /// UI-facing state. Only ever touched on the main thread.
@@ -10,7 +12,26 @@ final class AppModel: ObservableObject {
     let ring = LiveRing()
     let settings: AppSettings
 
-    init(settings: AppSettings) { self.settings = settings }
+    init(settings: AppSettings) {
+        self.settings = settings
+        // @Published fires before the value changes; hop to the next main-loop turn to read the new one.
+        otherVMsSetting = settings.$showOtherVMs.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
+            guard let self, let full = self.fullSnapshot else { return }
+            self.snapshot = self.shown(full)
+        }
+    }
+
+    /// The latest sample with every VM in it. `snapshot` is what the views show, which leaves out
+    /// other apps' VMs when the user has hidden them; recording always gets this one.
+    private var fullSnapshot: Snapshot?
+    private var otherVMsSetting: AnyCancellable?
+
+    private func shown(_ snap: Snapshot) -> Snapshot {
+        guard !settings.showOtherVMs else { return snap }
+        var s = snap
+        s.rows.removeAll { OtherVMs.isOther(key: $0.id) }
+        return s
+    }
 
     /// True while something is outside its normal range; drives the menu bar warning mark.
     var hasWarning: Bool {
@@ -20,6 +41,8 @@ final class AppModel: ObservableObject {
     }
     private(set) var store: HistoryStore?
     private var recorder: Recorder?
+    /// Sends the recorded history to the fleet's hub; nil when this Mac is not in a fleet.
+    private(set) var uploader: Uploader?
     private var detector = EventDetector()
     /// Each VM's name in UTM, kept so clearing a user-given name can bring it back.
     private var utmNames: [String: String] = [:]
@@ -32,9 +55,10 @@ final class AppModel: ObservableObject {
         if name.isEmpty { settings.vmAliases[key] = nil } else { settings.vmAliases[key] = name }
         // A VM that UTM no longer lists has no name to fall back to; it keeps the one it has.
         guard let shown = name.isEmpty ? utmNames[key] : name else { return }
-        if var snap = snapshot, let i = snap.rows.firstIndex(where: { $0.id == key }) {
+        if var snap = fullSnapshot, let i = snap.rows.firstIndex(where: { $0.id == key }) {
             snap.rows[i].name = shown
-            snapshot = snap
+            fullSnapshot = snap
+            snapshot = self.shown(snap)
         }
         ring.rename(key, to: shown)
         if let store { DispatchQueue.global(qos: .utility).async { store.rename(key: key, to: shown) } }
@@ -70,6 +94,33 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Starts sending this Mac's history to its fleet's hub. Without this call the app is the single-Mac app it always was.
+    func attachFleet(identity: HostIdentity, client: HubClient, onStatus: @escaping (Uploader.Status) -> Void) {
+        detachFleet()
+        guard let store, !identity.hostToken.isEmpty else { return }
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        let up = Uploader(store: store, client: client, token: identity.hostToken, appVersion: version)
+        up.onStatus = { status in
+            switch status.state {
+            case .starting: break
+            case .upToDate: FileLog.shared.log("fleet: up to date with the hub")
+            case .catchingUp: FileLog.shared.log("fleet: sending older history to the hub")
+            case .unreachable: FileLog.shared.log("fleet: hub not reachable, recording locally and will catch up")
+            case .rejected(let why): FileLog.shared.log("fleet: the hub refused this Mac: \(why)")
+            }
+            DispatchQueue.main.async { onStatus(status) }
+        }
+        up.setLive(snapshot: snapshot); up.setLive(link: link)
+        up.start()
+        uploader = up
+        FileLog.shared.log("fleet: reporting to \(identity.hubURL) as \(identity.name) (\(identity.hostUUID))")
+    }
+
+    func detachFleet() {
+        uploader?.stop()
+        uploader = nil
+    }
+
     /// Called on the main thread for every new sample.
     func ingest(_ raw: Snapshot) {
         // Rows leave here under the user's own names, so the views, the recorded history and the
@@ -81,13 +132,15 @@ final class AppModel: ObservableObject {
         }
         // The first sample or two after launch come before the VM configs are read, so limits and
         // headroom are not known yet. Show them, but do not record them as history.
-        guard !snap.notices.contains(where: { $0.hasPrefix("Reading configs") }) else { snapshot = snap; return }
+        fullSnapshot = snap
+        guard !snap.notices.contains(where: { $0.hasPrefix("Reading configs") }) else { snapshot = shown(snap); return }
         let events = detector.ingest(snap)
         let urgent = events.filter { ["pressure_warning", "pressure_critical", "swap_high", "cpu_limit"].contains($0.kind) }
         let plain = events.filter { !urgent.contains($0) }
         ring.append(snap, events: plain)
         recorder?.add(snap, events: plain)
-        snapshot = snap
+        uploader?.setLive(snapshot: snap)
+        snapshot = shown(snap)
         if !urgent.isEmpty { recordWithProcesses(urgent) }
     }
 
@@ -96,6 +149,7 @@ final class AppModel: ObservableObject {
         ring.append(p)
         recorder?.add(p)
         record(detector.ingest(p))
+        uploader?.setLive(link: p.link)
         link = p.link
     }
 
@@ -110,7 +164,7 @@ final class AppModel: ObservableObject {
         guard settings.captureProcesses else { record(events); return }
         // VM processes all share one system name; label them with the VM's own name instead.
         var vmNames: [Int32: String] = [:]
-        for row in snapshot?.rows ?? [] { if let pid = row.pid { vmNames[pid] = "VM: \(row.name)" } }
+        for row in fullSnapshot?.rows ?? [] { if let pid = row.pid { vmNames[pid] = "VM: \(row.name)" } }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let top = ProcessTop.capture()
             func name(_ p: TopProcess) -> String { vmNames[p.pid] ?? p.name }
@@ -179,5 +233,20 @@ final class Sampler {
         }
         t.resume()
         timer = t
+    }
+}
+
+/// VMs that run outside UTM. The engine keys them "pid:<n>" because they have no UTM identity.
+enum OtherVMs {
+    static func isOther(key: String) -> Bool { key.hasPrefix("pid:") }
+
+    /// The same history without those VMs: their lines, limits and start/stop events.
+    static func hidden(in history: History) -> History {
+        var h = history
+        h.vms.removeAll { isOther(key: $0.key) }
+        h.series = h.series.filter { !isOther(key: $0.key) }
+        h.configs = h.configs.filter { !isOther(key: $0.key) }
+        h.events.removeAll { $0.vmKey.map(isOther) ?? false }
+        return h
     }
 }

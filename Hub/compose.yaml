@@ -1,0 +1,16 @@
+# Runs the fleet hub on a Linux server:
+#   docker compose pull && docker compose up -d
+# Pairing code for a Mac:   docker compose exec hub utmwatch-hub token create --enroll
+# Token for the fleet view: docker compose exec hub utmwatch-hub token create --reader "my Mac"
+services:
+  hub:
+    image: ghcr.io/darrickbm/utm-watch-hub:latest
+    restart: unless-stopped
+    # Loopback only: the hub is never exposed to the internet. Publish it on the private network instead,
+    # for example with `tailscale serve --bg 8787`.
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - hub-data:/data
+volumes:
+  hub-data:

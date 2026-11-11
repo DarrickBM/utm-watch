@@ -22,6 +22,21 @@ final class DetailModel: ObservableObject {
     /// False while the window is closed, so nothing is computed for an invisible view.
     var isActive = false { didSet { if isActive { refresh(force: true); refreshStats() } } }
 
+    /// Set when this window shows another Mac of the fleet: its history then comes from the hub, not from this Mac's
+    /// memory and database. The closure calls back on the main thread; nil means the hub did not answer.
+    var remoteLoad: ((_ from: Int64, _ to: Int64, _ maxPoints: Int?, _ done: @escaping (History?) -> Void) -> Void)?
+    var isRemote: Bool { remoteLoad != nil }
+
+    /// Forgets what is shown, for when the window turns to a different Mac.
+    func reset() {
+        generation += 1
+        // An empty frame ending now, not one at 1970: the tracks place the pointer by the frame's times.
+        let now = Date().msSince1970
+        history = History(from: now - Int64(lengthSeconds) * 1000, to: now)
+        pin = nil; hover = nil; focus = nil; end = nil
+        lastQuery = .distantPast
+    }
+
     private let model: AppModel
     private let settings: AppSettings
     private var generation = 0
@@ -33,6 +48,13 @@ final class DetailModel: ObservableObject {
         self.model = model
         self.settings = settings
         cancellable = model.$snapshot.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh(force: false) }
+        otherVMsSetting = settings.$showOtherVMs.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh(force: true) }
+    }
+
+    private var otherVMsSetting: AnyCancellable?
+
+    private func shown(_ h: History) -> History {
+        settings.showOtherVMs ? h : OtherVMs.hidden(in: h)
     }
 
     var isLive: Bool { end == nil }
@@ -83,10 +105,24 @@ final class DetailModel: ObservableObject {
     func refresh(force: Bool) {
         guard isActive else { return }
         let to = frameEnd.msSince1970, from = to - Int64(lengthSeconds) * 1000
+        if let remoteLoad {
+            // Another Mac: ask the hub. A live frame is asked again every five seconds, a fixed one only when it changes.
+            if !force, !(isLive && Date().timeIntervalSince(lastQuery) >= 5) { return }
+            lastQuery = Date()
+            generation += 1
+            let g = generation
+            remoteLoad(from, to, 800) { [weak self] h in
+                guard let self, g == self.generation, let h else { return }
+                self.history = self.shown(h)
+                // A pointer position read against an older frame means nothing in this one.
+                if let hover = self.hover?.msSince1970, hover < h.from || hover > h.to { self.hover = nil }
+            }
+            return
+        }
         if isLive, lengthSeconds <= 3600 {
             // Short live frames come straight from memory: no disk access, updates on every sample.
             generation += 1
-            history = model.ring.history(from: from, to: to, bucketMs: Double(settings.sampleInterval) * 1000)
+            history = shown(model.ring.history(from: from, to: to, bucketMs: Double(settings.sampleInterval) * 1000))
         } else {
             // Long live frames barely move per sample; re-query them twice a minute.
             if !force, !(isLive && Date().timeIntervalSince(lastQuery) >= 30) { return }
@@ -98,7 +134,7 @@ final class DetailModel: ObservableObject {
                 let h = store.load(from: from, to: to, maxPoints: 800)
                 DispatchQueue.main.async {
                     guard let self, g == self.generation else { return } // a newer request superseded this one
-                    self.history = h
+                    self.history = self.shown(h)
                 }
             }
         }
@@ -106,7 +142,7 @@ final class DetailModel: ObservableObject {
     }
 
     func refreshStats() {
-        guard let store = model.store else { return }
+        guard !isRemote, let store = model.store else { return }
         lastStats = Date()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let s = store.stats()

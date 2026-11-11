@@ -165,6 +165,37 @@ open build/UTMWatch.app
 
 On first launch macOS asks for three permissions: access to data from other apps (UTM's VM files), control of UTM, and the local network (pings to your router and VMs). History is stored in `~/Library/Application Support/UTM Watch/history.sqlite`.
 
+## Fleet: several Macs, one view
+
+UTM Watch on one Mac needs nothing below. With several Macs, one of them hosts a **hub** and the others report to it;
+any of them can then open **Open Fleet** from the menu bar item and see every Mac's VMs, and click a Mac for its history.
+
+1. On the Mac that will host the hub: Settings › Fleet › **Host the hub on this Mac**, then **New pairing code**.
+2. On each other Mac: Settings › Fleet, paste the code, **Join**. A code adds one Mac and works once, for 15 minutes.
+
+A Mac that joins uploads its last 24 hours, then new history every ten seconds. If the hub cannot be reached it keeps
+recording and fills the gap later. The hub Mac has to stay on and logged in.
+
+**Macs on other networks.** On the hub Mac, under "Connect Macs on other networks", paste an auth key from your own
+Tailscale account (reusable, tagged, pre-approved). UTM Watch then carries its own hidden Tailscale node: nothing
+appears in the menu bar or in System Settings, and a Tailscale you already run is left alone. Pairing codes made after
+that work from any network.
+
+**A hub on a server.** The same hub runs on Linux:
+
+```sh
+docker build -f Hub/Dockerfile -t utm-watch-hub . && docker run -d -p 127.0.0.1:8787:8787 -v hub-data:/data utm-watch-hub
+docker exec <container> utmwatch-hub token create --enroll     # a pairing token
+utmwatch fleet enroll --hub http://hub-address:8787 --code <token>
+```
+
+**AI diagnosis across the fleet.** On a Mac that has joined, the MCP server offers `list_macs`, and every tool takes
+an optional `mac` (a name or UUID). Without `mac` a tool answers for the Mac it runs on, from its own database,
+exactly as before; that keeps working when the hub is down.
+
+`utmwatch fleet status`, `leave`, `view` and `sim` are command-line equivalents and testing aids. The design is in
+[docs/DESIGN-fleet.md](docs/DESIGN-fleet.md).
+
 ## AI diagnosis through MCP
 
 The app bundle contains `utmwatch-mcp`, a read-only Model Context Protocol server over standard input/output. An agent started on this Mac can use it to read the recorded history and work out why a VM was slow. Connect Claude Code with:

@@ -26,6 +26,8 @@ struct TracksView: View {
     var availableHeight: CGFloat = 0
     /// VM key to emphasize; lines of the other VMs are drawn faint.
     var focus: String? = nil
+    /// What the host's own lines are called: "This Mac", or another Mac's name in the fleet window.
+    var hostName = "This Mac"
     private func strength(_ key: String) -> Double { focus == nil || focus == key ? 1 : 0.16 }
 
     /// Title, unit and per-series readings.
@@ -348,7 +350,7 @@ struct TracksView: View {
         let yMax = total > 0 ? total : max(1_073_741_824.0, history.host.map(\.swapUsed).max() ?? 0)
         let point = Readout.nearest(history.host, t: readoutT, tolerance: Readout.tolerance(history), time: { $0.t })
         let line = Color.primary.opacity(0.72)
-        var item = LegendItem(name: "This Mac", color: line, value: "—")
+        var item = LegendItem(name: hostName, color: line, value: "—")
         if let p = point {
             if p.swapTotal > 0 {
                 let used = p.swapUsed / p.swapTotal

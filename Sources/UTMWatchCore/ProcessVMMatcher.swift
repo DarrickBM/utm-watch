@@ -23,12 +23,38 @@ public enum ProcessVMMatcher {
     }
 
     /// The bundle URL this process belongs to, if any of its open files live inside a `.utm` package.
-    public static func bundleURL(pid: Int32) -> URL? {
-        for path in openPaths(pid: pid) {
+    public static func bundleURL(pid: Int32) -> URL? { bundleURL(fromOpenPaths: openPaths(pid: pid)) }
+
+    public static func bundleURL(fromOpenPaths paths: [String]) -> URL? {
+        for path in paths {
             if let bundle = utmBundlePath(fromOpenPath: path) {
                 return URL(fileURLWithPath: bundle, isDirectory: true)
             }
         }
+        return nil
+    }
+
+    /// Folders other VM tools keep their disk images in. First match wins, so Colima and Rancher Desktop,
+    /// which both nest a Lima folder, come before Lima.
+    private static let otherApps: [(marker: String, name: String)] = [
+        ("/com.docker.docker/", "Docker Desktop"),
+        ("/.orbstack/", "OrbStack"),
+        ("/.tart/", "Tart"),
+        ("/.lume/", "Lume"),
+        ("/.colima/", "Colima"),
+        ("/rancher-desktop/", "Rancher Desktop"),
+        ("/containers/podman/", "Podman"),
+        ("/.lima/", "Lima"),
+    ]
+
+    /// "/Users/d/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw" -> "Docker Desktop"
+    public static func otherApp(fromOpenPath path: String) -> String? {
+        otherApps.first { path.contains($0.marker) }?.name
+    }
+
+    /// The app a VM process outside UTM belongs to, judged by the files it holds open.
+    public static func otherApp(fromOpenPaths paths: [String]) -> String? {
+        for path in paths { if let name = otherApp(fromOpenPath: path) { return name } }
         return nil
     }
 }
