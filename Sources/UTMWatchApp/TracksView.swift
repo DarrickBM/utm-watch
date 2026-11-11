@@ -109,8 +109,9 @@ struct TracksView: View {
                      return "\(name) is using \(String(format: "%.1f", used)) of its \(limit) cores: at its CPU limit, so work inside it is waiting for processor time."
                  },
                  explanation: "Cores each VM is keeping busy, then the number it is allowed to use.\n\nHow it is measured: every sample, the CPU time the VM's process has used (user plus system) is compared with the previous sample and divided by the real time between them. 1.0 means one core fully busy. The limit is the CPU count in the VM's UTM configuration. Over long time frames each point is the average of its interval and the faint line is the peak."),
-            // A VM's footprint sits at its limit once the guest has touched all its memory, so the line that
+            // A VM's footprint stops moving once the guest has touched all its memory, so the line that
             // carries information is how much of it is in RAM right now; the footprint is the dashed line.
+            // The footprint is the whole VM process, so it can read higher than the guest's configured memory.
             Spec(title: "Memory", unit: "in RAM / held (dashed)", value: { $0.res }, peak: { $0.res }, yMax: memMax,
                  label: { Format.memory(UInt64(max(0, $0))) },
                  text: { p, _ in
@@ -120,7 +121,7 @@ struct TracksView: View {
                      return "\(String(format: "%.1f", inRAM / 1_073_741_824)) / \(held)"
                  },
                  secondary: { $0.mem },
-                 explanation: "Solid line: how much of the VM's memory is in this Mac's RAM right now. Dashed line: how much the VM holds in total.\n\nHow it is measured: \"held\" is the physical footprint of the VM's process, including pages macOS has compressed or moved to swap; it matches Activity Monitor's Memory column. \"In RAM\" is the process's resident size, which leaves those pages out. A guest that has touched all its memory stays at its limit, so the dashed line is usually flat. The gap between the two lines is memory the VM must wait for when it needs it again. The limit is the memory size in the VM's UTM configuration."),
+                 explanation: "Solid line: how much of the VM's memory is in this Mac's RAM right now. Dashed line: how much the VM holds in total.\n\nHow it is measured: \"held\" is the physical footprint of the VM's process, including pages macOS has compressed or moved to swap; it matches Activity Monitor's Memory column. \"In RAM\" is the process's resident size, which leaves those pages out. Once a guest has touched all its memory the dashed line is usually flat. The gap between the two lines is memory the VM must wait for when it needs it again.\n\nWhy held can be more than the VM's memory size: held covers everything macOS charges to the VM's process, not only the guest's own memory. Memory the Mac uses on the VM's behalf, such as for its display, is counted too, so held can read higher than the memory size set in UTM."),
             Spec(title: "Network ↓", unit: "into the VM", value: { $0.down }, peak: { $0.downMax }, yMax: downMax,
                  label: { Format.rate($0, units: u) }, text: { p, _ in Format.rate(p.down, units: u) },
                  explanation: "Data arriving in each VM per second.\n\nHow it is measured: each VM has its own virtual network interface on this Mac (vmenetN), found by looking up the VM's MAC address in the bridge's address table. The interface's byte counters are read every sample and the change is divided by the time between samples. Directions are from the VM's point of view: down is into the VM. Units are decimal: 1 MB/s is 1,000,000 bytes per second. VMs on bridged networking show nothing here."),
