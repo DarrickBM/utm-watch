@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-0.4.0}"
+VERSION="${1:-0.5.0}"
 DIST="dist"
 rm -rf "$DIST"
 mkdir -p "$DIST"
