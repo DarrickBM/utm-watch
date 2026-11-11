@@ -20,11 +20,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var pruneTimer: Timer?
     private var keyMonitor: Any?
 
+    /// A menu bar app shows no menu bar of its own, but text fields get Cut, Copy, Paste, Select All and Undo from the
+    /// key equivalents of an Edit menu. Without one, ⌘V does nothing in Settings.
+    private func installEditMenu() {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let main = NSMenu()
+        let app = NSMenuItem(); app.submenu = NSMenu()
+        let editItem = NSMenuItem(); editItem.submenu = edit
+        main.addItem(app); main.addItem(editItem)
+        NSApp.mainMenu = main
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let logDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs")
         FileLog.shared.open(path: logDir.appendingPathComponent("UTMWatch.log").path)
         FileLog.shared.log("launch pid \(ProcessInfo.processInfo.processIdentifier) args \(CommandLine.arguments.dropFirst().joined(separator: " "))")
 
+        installEditMenu()
         let debug = CommandLine.arguments.contains("--debug")
         statusItem = StatusItemController(model: model, settings: settings, updater: updater, debug: debug)
         statusItem.onOpenDetails = { [weak self] in self?.showDetails() }
@@ -65,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         runDebugSnapshotIfRequested()
         runDebugViewSnapshots()
         runDebugFleetSnapshot()
+        runDebugEditKeyCheck()
         updater.start()
         // Debug aid: `--update-now` installs a newer release without a click, so the update path can be tested.
         if CommandLine.arguments.contains("--update-now") {
@@ -219,6 +240,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             FileLog.shared.log("snapshot written to \(path)")
+        }
+    }
+
+    /// Debug aid: `--check-edit-keys <file>` opens Settings, presses ⌘A ⌘C ⌘X ⌘V ⌘Z in every text field as real key
+    /// events, and writes what each did. The clipboard is put back afterwards.
+    private func runDebugEditKeyCheck() {
+        let args = CommandLine.arguments
+        guard let i = args.firstIndex(of: "--check-edit-keys"), i + 1 < args.count else { return }
+        let out = args[i + 1]
+        showSettings()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, let window = self.settingsWindow else { return }
+            let board = NSPasteboard.general
+            let saved = board.string(forType: .string)
+            func fields(_ v: NSView) -> [NSTextField] { (v as? NSTextField).map { $0.isEditable ? [$0] : [] } ?? [] + v.subviews.flatMap(fields) }
+            func press(_ ch: String, code: UInt16, shift: Bool = false) {
+                var flags: NSEvent.ModifierFlags = .command
+                if shift { flags.insert(.shift) }
+                for type in [NSEvent.EventType.keyDown, .keyUp] {
+                    if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                                windowNumber: window.windowNumber, context: nil, characters: ch, charactersIgnoringModifiers: ch, isARepeat: false, keyCode: code) {
+                        NSApp.sendEvent(e)
+                    }
+                }
+            }
+            var lines = ["key window: \(window.isKeyWindow), app active: \(NSApp.isActive)"]
+            for f in fields(window.contentView ?? NSView()) {
+                let kind = f is NSSecureTextField ? "secure" : "plain"
+                let label = "\(kind) field “\(f.placeholderString ?? f.placeholderAttributedString?.string ?? "?")”"
+                let original = f.stringValue
+                guard window.makeFirstResponder(f), let editor = f.currentEditor() else { lines.append("\(label): could not focus"); continue }
+                editor.string = "hello"
+                editor.selectedRange = NSRange(location: 5, length: 0)
+                press("a", code: 0)
+                let all = editor.selectedRange.length == 5
+                board.clearContents(); board.setString("marker", forType: .string)
+                press("c", code: 8)
+                let copy = board.string(forType: .string) == "hello"
+                board.clearContents(); board.setString("marker", forType: .string)
+                press("x", code: 7)
+                let cut = editor.string.isEmpty && board.string(forType: .string) == "hello"
+                editor.string = ""
+                board.clearContents(); board.setString("pasted", forType: .string)
+                press("v", code: 9)
+                let paste = editor.string == "pasted"
+                press("z", code: 6)
+                let undo = editor.string != "pasted"
+                lines.append("\(label): selectAll \(all), copy \(copy), cut \(cut), paste \(paste), undo \(undo)")
+                editor.string = original
+                f.stringValue = original
+            }
+            board.clearContents()
+            if let saved { board.setString(saved, forType: .string) }
+            try? lines.joined(separator: "\n").write(toFile: out, atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
         }
     }
 
