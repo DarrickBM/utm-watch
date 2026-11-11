@@ -157,6 +157,7 @@ func momentJSON(_ h: History, at t: Int64) -> [String: Any] {
             d["state"] = "running"
             if let v = p.cpu { d["cpuCores"] = r3(v) }
             if let v = p.mem { d["memoryGB"] = r3(v / gib) }
+            if let v = p.res { d["memoryInRAMGB"] = r3(v / gib) }
             if let v = p.down { d["downloadKBps"] = r3(v / 1000) }
             if let v = p.up { d["uploadKBps"] = r3(v / 1000) }
             if let v = p.diskRead { d["diskReadKBps"] = r3(v / 1000) }

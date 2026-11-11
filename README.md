@@ -106,7 +106,7 @@ swift run selftest
 | Column | Definition | Source |
 |---|---|---|
 | CPU | Process CPU time (user + system) delta ÷ real elapsed time, in cores. 1.0 = one core fully busy. | `proc_pid_rusage` |
-| Memory | Physical footprint of the VM process, **including compressed pages**; matches Activity Monitor's Memory column. The limit is the VM's configured RAM. | `proc_pid_rusage`, `config.plist` |
+| Memory | Physical footprint of the VM process, **including compressed pages**; matches Activity Monitor's Memory column. The limit is the VM's configured RAM. A guest that has touched all its memory stays at the limit, so the detail window's Memory track also plots how much of the footprint is **in RAM right now** (solid) against the footprint (dashed). | `proc_pid_rusage`, `config.plist` |
 | ↓ Down / ↑ Up | Bytes per second on the VM's `vmenetN` interface, from the guest's point of view. | per-interface MIB (64-bit counters) |
 | Total ↓/↑ | Bytes since the interface was created (i.e. since the VM booted). | same |
 | Allocatable | total RAM − memory used by macOS and your apps (measured, not a fixed reserve) − configured RAM of all running VMs. VMs can grow to their limit, so limits are counted, not current footprints. | `host_statistics64`, `config.plist` |

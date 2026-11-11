@@ -133,6 +133,7 @@ do {
         var rows = [VMRow(id: "A", name: "macOS 26", backend: .apple, status: .running, pid: 10, identified: true, isMacOS: true,
                           cpuCores: 1.0 + Double(i % 5) * 0.1, cpuAllocated: 6, memoryBytes: 7 * gb, memoryAllocatedBytes: 8 * gb,
                           downRate: 1000, upRate: 500, downTotal: UInt64(i) * 2000, upTotal: UInt64(i) * 1000)]
+        rows[0].residentBytes = 3 * gb
         rows.append(bRunning
             ? VMRow(id: "B", name: "macOS 26 B", backend: .apple, status: .running, pid: 11, identified: true, isMacOS: true,
                     cpuCores: bCPU, cpuAllocated: 4, memoryBytes: 6 * gb, memoryAllocatedBytes: 8 * gb, downRate: 2e6, upRate: 1e5, downTotal: 5, upTotal: 6)
@@ -154,6 +155,7 @@ do {
         check(raw.series["B"]?.count == 270, "B has a one-minute gap")
         check(raw.host.count == 300 && raw.events.count == 1, "host samples and events stored")
         check(raw.series["A"]?.first?.mem == Double(7 * gb) && raw.series["A"]?.last?.downTotal == 299 * 2000, "memory and totals stored as real byte counts")
+        check(raw.series["A"]?.first?.res == Double(3 * gb) && raw.series["B"]?.first?.res == nil, "memory in RAM stored when measured, absent otherwise")
         check(raw.config(for: "A", at: t0)?.memBytes == Double(8 * gb) && raw.host.first?.swapTotal == Double(4 * gb), "limits and host values stored as real byte counts")
         check(raw.vms.map(\.key) == ["A", "B"], "VMs listed in first-seen order")
         check(raw.config(for: "A", at: t0 + 1000)?.cores == 6, "config recorded once and found by time")

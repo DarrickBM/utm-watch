@@ -22,6 +22,8 @@ int shim_proc_start_time(pid_t pid, uint64_t *sec);
 /// Cumulative user/system CPU time in nanoseconds and physical footprint in bytes.
 /// Returns 0 on success.
 int shim_proc_rusage(pid_t pid, uint64_t *user_ns, uint64_t *system_ns, uint64_t *footprint);
+/* Bytes of the process that are in physical RAM right now (excludes compressed and swapped pages). */
+int shim_proc_resident(pid_t pid, uint64_t *resident);
 
 typedef void (*shim_path_cb)(const char *path, void *ctx);
 /// Calls `cb` once per vnode (file) the process has open. Returns count, or -1.

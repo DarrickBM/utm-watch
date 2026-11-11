@@ -65,6 +65,8 @@ struct TracksView: View {
         /// The reading shown beside the track for one VM.
         var text: (VMPoint, VMConfig?) -> String
         var warning: (VMPoint, VMConfig?, String) -> String? = { _, _, _ in nil }
+        /// A second, dashed line per VM drawn behind the main one.
+        var secondary: ((VMPoint) -> Double?)? = nil
     }
 
     private struct LegendItem {
@@ -97,9 +99,17 @@ struct TracksView: View {
                      guard let used = p.cpu, let limit = cfg?.cores, limit > 0, used >= 0.9 * Double(limit) else { return nil }
                      return "\(name) is using \(String(format: "%.1f", used)) of its \(limit) cores: at its CPU limit, so work inside it is waiting for processor time."
                  }),
-            Spec(title: "Memory", unit: "used / limit", value: { $0.mem }, peak: { $0.mem }, yMax: memMax,
+            // A VM's footprint sits at its limit once the guest has touched all its memory, so the line that
+            // carries information is how much of it is in RAM right now; the footprint is the dashed line.
+            Spec(title: "Memory", unit: "in RAM / held (dashed)", value: { $0.res }, peak: { $0.res }, yMax: memMax,
                  label: { Format.memory(UInt64(max(0, $0))) },
-                 text: { p, cfg in Format.memoryPair(p.mem.map { UInt64(max(0, $0)) }, cfg?.memBytes.map { UInt64(max(0, $0)) }) }),
+                 text: { p, _ in
+                     let held = p.mem.map { Format.memory(UInt64(max(0, $0))) } ?? "—"
+                     // History recorded before the in-RAM figure was measured has only the footprint.
+                     guard let inRAM = p.res else { return "held \(held)" }
+                     return "\(String(format: "%.1f", inRAM / 1_073_741_824)) / \(held)"
+                 },
+                 secondary: { $0.mem }),
             Spec(title: "Network ↓", unit: "into the VM", value: { $0.down }, peak: { $0.downMax }, yMax: downMax,
                  label: { Format.rate($0, units: u) }, text: { p, _ in Format.rate(p.down, units: u) }),
             Spec(title: "Network ↑", unit: "out of the VM", value: { $0.up }, peak: { $0.upMax }, yMax: upMax,
@@ -246,7 +256,11 @@ struct TracksView: View {
                         return p
                     }
                     let k = strength(vm.key)
-                    if showPeaks { ctx.stroke(path(spec.peak), with: .color(c.opacity(0.35 * k)), style: StrokeStyle(lineWidth: 1, lineJoin: .round)) }
+                    if let secondary = spec.secondary {
+                        ctx.stroke(path(secondary), with: .color(c.opacity(0.6 * k)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round, dash: [5, 4]))
+                    } else if showPeaks {
+                        ctx.stroke(path(spec.peak), with: .color(c.opacity(0.35 * k)), style: StrokeStyle(lineWidth: 1, lineJoin: .round))
+                    }
                     ctx.stroke(path(spec.value), with: .color(c.opacity(k)), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                 }
 

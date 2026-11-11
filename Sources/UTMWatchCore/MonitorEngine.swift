@@ -201,6 +201,7 @@ public final class MonitorEngine {
                     upTotal: counter.map { swap ? $0.obytes : $0.ibytes })
                 row.diskReadRate = u?.diskReadRate
                 row.diskWriteRate = u?.diskWriteRate
+                row.residentBytes = u?.resident
                 rows.append(row)
             } else {
                 var row = VMRow(id: "pid:\(proc.pid)", name: "Unidentified VM (PID \(proc.pid))",
@@ -208,6 +209,7 @@ public final class MonitorEngine {
                                 cpuCores: u?.cpuCores, memoryBytes: u?.footprint)
                 row.diskReadRate = u?.diskReadRate
                 row.diskWriteRate = u?.diskWriteRate
+                row.residentBytes = u?.resident
                 rows.append(row)
             }
         }

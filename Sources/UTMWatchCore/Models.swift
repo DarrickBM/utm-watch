@@ -55,6 +55,8 @@ public struct VMRow: Codable, Equatable {
     /// Bytes per second the VM process reads from and writes to disk.
     public var diskReadRate: Double? = nil
     public var diskWriteRate: Double? = nil
+    /// The part of `memoryBytes` that is in physical RAM right now. The rest has been compressed or swapped by the Mac.
+    public var residentBytes: UInt64? = nil
 
     public init(id: String, name: String, backend: VMBackend, status: VMStatus, pid: Int32? = nil,
                 identified: Bool, isMacOS: Bool = false, cpuCores: Double? = nil, cpuAllocated: Int? = nil,

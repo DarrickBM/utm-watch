@@ -60,6 +60,13 @@ int shim_proc_rusage(pid_t pid, uint64_t *user_ns, uint64_t *system_ns, uint64_t
     return 0;
 }
 
+int shim_proc_resident(pid_t pid, uint64_t *resident) {
+    struct rusage_info_v4 ri;
+    if (proc_pid_rusage(pid, RUSAGE_INFO_V4, (rusage_info_t *)&ri) != 0) return -1;
+    *resident = ri.ri_resident_size;
+    return 0;
+}
+
 int shim_proc_open_paths(pid_t pid, shim_path_cb cb, void *ctx) {
     int size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
     if (size <= 0) return -1;

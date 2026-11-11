@@ -30,18 +30,20 @@ public struct VMPoint: Equatable {
     public var upTotal: Double?
     public var diskRead: Double?   // bytes per second
     public var diskWrite: Double?
+    /// Bytes of `mem` that were in physical RAM; nil for history recorded before this was measured.
+    public var res: Double?
 
     public init(t: Int64, cpu: Double?, cpuMax: Double? = nil, mem: Double?, down: Double?, downMax: Double? = nil,
-                up: Double?, upMax: Double? = nil, downTotal: Double?, upTotal: Double?, diskRead: Double? = nil, diskWrite: Double? = nil) {
+                up: Double?, upMax: Double? = nil, downTotal: Double?, upTotal: Double?, diskRead: Double? = nil, diskWrite: Double? = nil, res: Double? = nil) {
         self.t = t; self.cpu = cpu; self.cpuMax = cpuMax ?? cpu; self.mem = mem
         self.down = down; self.downMax = downMax ?? down; self.up = up; self.upMax = upMax ?? up
-        self.downTotal = downTotal; self.upTotal = upTotal; self.diskRead = diskRead; self.diskWrite = diskWrite
+        self.downTotal = downTotal; self.upTotal = upTotal; self.diskRead = diskRead; self.diskWrite = diskWrite; self.res = res
     }
 
     public init(row: VMRow, ts: Int64) {
         self.init(t: ts, cpu: row.cpuCores, mem: row.memoryBytes.map { Double($0) }, down: row.downRate, up: row.upRate,
                   downTotal: row.downTotal.map { Double($0) }, upTotal: row.upTotal.map { Double($0) },
-                  diskRead: row.diskReadRate, diskWrite: row.diskWriteRate)
+                  diskRead: row.diskReadRate, diskWrite: row.diskWriteRate, res: row.residentBytes.map { Double($0) })
     }
 }
 

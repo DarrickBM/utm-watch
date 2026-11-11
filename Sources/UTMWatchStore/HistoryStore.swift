@@ -48,9 +48,20 @@ public final class HistoryStore {
                 if found != 0 { FileLog.shared.log("history schema changed (\(found) -> \(HistoryStore.schemaVersion)); old history dropped") }
             }
             try createSchema()
+            // Columns added after schema 2 shipped. They are appended in place and the version stays the same on purpose:
+            // a version change makes an older copy of the app drop the whole history, and this keeps it.
+            try addColumnIfMissing(table: "sample", column: "res", type: "REAL")
+            try addColumnIfMissing(table: "sample_1m", column: "res_avg", type: "REAL")
             try db.exec("PRAGMA user_version = \(HistoryStore.schemaVersion)")
         }
         try loadCaches()
+    }
+
+    private func addColumnIfMissing(table: String, column: String, type: String) throws {
+        let q = try db.prepare("SELECT count(*) FROM pragma_table_info('\(table)') WHERE name = '\(column)'")
+        let present = q.step() && q.int(0) > 0
+        q.reset()
+        if !present { try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(type)") }
     }
 
     private func createSchema() throws {
@@ -100,7 +111,7 @@ public final class HistoryStore {
         queue.sync {
             do {
                 try db.exec("BEGIN")
-                let insSample = try db.prepare("INSERT OR REPLACE INTO sample VALUES(?,?,?,?,?,?,?,?,?,?)")
+                let insSample = try db.prepare("INSERT OR REPLACE INTO sample VALUES(?,?,?,?,?,?,?,?,?,?,?)")
                 let insHost = try db.prepare("INSERT OR REPLACE INTO host_sample VALUES(?,?,?,?,?,?,?,?,?)")
                 let insProbe = try db.prepare("INSERT OR REPLACE INTO probe VALUES(?,?,?,?)")
                 let insLink = try db.prepare("INSERT OR REPLACE INTO link_sample VALUES(?,?,?,?,?,?,?,?)")
@@ -118,7 +129,7 @@ public final class HistoryStore {
                         }
                         let p = VMPoint(row: row, ts: ts)
                         insSample.bind(1, id).bind(2, ts).bind(3, p.cpu).bind(4, p.mem).bind(5, p.down).bind(6, p.up)
-                            .bind(7, p.downTotal).bind(8, p.upTotal).bind(9, p.diskRead).bind(10, p.diskWrite).run()
+                            .bind(7, p.downTotal).bind(8, p.upTotal).bind(9, p.diskRead).bind(10, p.diskWrite).bind(11, p.res).run()
                     }
                     let h = HostPoint(snapshot: snap)
                     insHost.bind(1, h.t).bind(2, h.used).bind(3, h.other).bind(4, h.allocatable).bind(5, Int64(h.pressure))
@@ -176,7 +187,7 @@ public final class HistoryStore {
         try db.prepare("""
             INSERT OR REPLACE INTO sample_1m
             SELECT vm_id, ts / 60000, avg(cpu), max(cpu), avg(mem), avg(down), max(down), avg(up), max(up), max(down_total), max(up_total),
-                   avg(disk_read), avg(disk_write)
+                   avg(disk_read), avg(disk_write), avg(res)
             FROM sample WHERE ts >= ? AND ts < ? GROUP BY vm_id, ts / 60000
             """).bind(1, from * 60000).bind(2, currentMinute * 60000).run()
         try db.prepare("""
@@ -219,12 +230,12 @@ public final class HistoryStore {
                 let sql = useRollup ? """
                     SELECT vm_id, (minute * 60000 + 30000 - ?1) * ?3 / ?4 AS b, CAST(avg(minute * 60000 + 30000) AS INTEGER),
                            avg(cpu_avg), max(cpu_max), avg(mem_avg), avg(down_avg), max(down_max), avg(up_avg), max(up_max), max(down_total), max(up_total),
-                           avg(disk_read), avg(disk_write)
+                           avg(disk_read), avg(disk_write), avg(res_avg)
                     FROM sample_1m WHERE minute >= ?1 / 60000 AND minute <= ?2 / 60000 GROUP BY vm_id, b ORDER BY vm_id, b
                     """ : """
                     SELECT vm_id, (ts - ?1) * ?3 / ?4 AS b, CAST(avg(ts) AS INTEGER),
                            avg(cpu), max(cpu), avg(mem), avg(down), max(down), avg(up), max(up), max(down_total), max(up_total),
-                           avg(disk_read), avg(disk_write)
+                           avg(disk_read), avg(disk_write), avg(res)
                     FROM sample WHERE ts >= ?1 AND ts <= ?2 GROUP BY vm_id, b ORDER BY vm_id, b
                     """
                 let q = try db.prepare(sql).bind(1, from).bind(2, to).bind(3, buckets).bind(4, span)
@@ -233,7 +244,7 @@ public final class HistoryStore {
                     h.series[key, default: []].append(VMPoint(
                         t: q.int(2), cpu: q.doubleOrNil(3), cpuMax: q.doubleOrNil(4), mem: q.doubleOrNil(5),
                         down: q.doubleOrNil(6), downMax: q.doubleOrNil(7), up: q.doubleOrNil(8), upMax: q.doubleOrNil(9),
-                        downTotal: q.doubleOrNil(10), upTotal: q.doubleOrNil(11), diskRead: q.doubleOrNil(12), diskWrite: q.doubleOrNil(13)))
+                        downTotal: q.doubleOrNil(10), upTotal: q.doubleOrNil(11), diskRead: q.doubleOrNil(12), diskWrite: q.doubleOrNil(13), res: q.doubleOrNil(14)))
                 }
                 h.vms = order.filter { h.series[$0] != nil }.compactMap { infos[$0] }
 

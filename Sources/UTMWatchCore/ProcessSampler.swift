@@ -7,6 +7,8 @@ public struct ProcessSample: Equatable {
     public var wallNanos: UInt64
     public var diskRead: UInt64
     public var diskWritten: UInt64
+    /// Bytes in physical RAM right now; the rest of the footprint is compressed or swapped.
+    public var resident: UInt64? = nil
     public init(cpuNanos: UInt64, footprint: UInt64, wallNanos: UInt64, diskRead: UInt64 = 0, diskWritten: UInt64 = 0) {
         self.cpuNanos = cpuNanos; self.footprint = footprint; self.wallNanos = wallNanos
         self.diskRead = diskRead; self.diskWritten = diskWritten
@@ -19,6 +21,7 @@ public struct ProcessUsage: Equatable {
     public var footprint: UInt64
     public var diskReadRate: Double? = nil
     public var diskWriteRate: Double? = nil
+    public var resident: UInt64? = nil
 }
 
 /// Turns cumulative per-process CPU time into "cores busy" between consecutive samples.
@@ -32,7 +35,10 @@ public final class ProcessSampler {
         guard shim_proc_rusage(pid, &user, &system, &footprint) == 0 else { return nil }
         var read: UInt64 = 0, written: UInt64 = 0
         _ = shim_proc_diskio(pid, &read, &written)
-        return ProcessSample(cpuNanos: user &+ system, footprint: footprint, wallNanos: now, diskRead: read, diskWritten: written)
+        var sample = ProcessSample(cpuNanos: user &+ system, footprint: footprint, wallNanos: now, diskRead: read, diskWritten: written)
+        var resident: UInt64 = 0
+        if shim_proc_resident(pid, &resident) == 0 { sample.resident = resident }
+        return sample
     }
 
     /// Cores busy between two samples; nil when time went backwards (pid reuse, clock issue).
@@ -51,6 +57,7 @@ public final class ProcessSampler {
             next[pid] = cur
             let cores = previous[pid].flatMap { Self.cores(previous: $0, current: cur) }
             var usage = ProcessUsage(cpuCores: cores, footprint: cur.footprint)
+            usage.resident = cur.resident
             if let prev = previous[pid], cur.wallNanos > prev.wallNanos, cur.diskRead >= prev.diskRead, cur.diskWritten >= prev.diskWritten {
                 let seconds = Double(cur.wallNanos - prev.wallNanos) / 1e9
                 usage.diskReadRate = Double(cur.diskRead - prev.diskRead) / seconds
