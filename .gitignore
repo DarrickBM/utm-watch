@@ -5,3 +5,4 @@
 build/
 PRD-*.md
 dist/
+.claude/
