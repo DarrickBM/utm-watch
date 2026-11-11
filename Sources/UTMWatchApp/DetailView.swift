@@ -83,9 +83,7 @@ struct DetailView: View {
                     Text("Live").fontWeight(.semibold)
                 }
             } else {
-                if let pin = detail.pin {
-                    Text("Showing \(Self.shortStamp.string(from: pin))").foregroundStyle(.secondary).monospacedDigit().fixedSize()
-                }
+                // The header below names the moment being shown; here the button is enough at the minimum width.
                 Button("Back to live") { detail.goLive() }.buttonStyle(.borderedProminent)
             }
             Button { onSettings() } label: { Image(systemName: "slider.horizontal.3") }
@@ -252,7 +250,6 @@ struct DetailView: View {
     }
 
     private static let stamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE d MMM, HH:mm:ss"; return f }()
-    private static let shortStamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE d MMM, HH:mm:ss"; return f }()
 
     @Environment(\.colorScheme) private var scheme
 

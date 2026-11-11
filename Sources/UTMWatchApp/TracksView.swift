@@ -416,7 +416,7 @@ struct TracksView: View {
             var t = ((Double(history.from) + offset) / step).rounded(.up) * step - offset
             while t <= Double(history.to) {
                 let x = fraction(Int64(t)) * w
-                if pinX.map({ abs($0 - x) < 46 }) != true {
+                if pinX.map({ abs($0 - x) < 62 }) != true {
                     let text = Text(f.string(from: Date(ms: Int64(t)))).font(.system(size: 11)).foregroundStyle(.secondary)
                     let anchor: UnitPoint = x < 24 ? .leading : (x > w - 24 ? .trailing : .center)
                     ctx.draw(text, at: CGPoint(x: x, y: size.height / 2), anchor: anchor)
