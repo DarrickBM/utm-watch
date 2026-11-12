@@ -26,6 +26,8 @@ final class FleetController: ObservableObject {
     @Published private(set) var upload: Uploader.Status?
     @Published private(set) var joining = false
     @Published var joinError: String?
+    /// What a join in progress is waiting for, when it is more than a moment.
+    @Published private(set) var joinProgress: String?
     // Hosting the hub
     @Published private(set) var hubRunning = false
     @Published private(set) var hubError: String?
@@ -90,7 +92,8 @@ final class FleetController: ObservableObject {
     func start() {
         identity = HostIdentity.load()
         // The helper's own state is enough to rejoin; the key is only needed the first time.
-        if FileManager.default.fileExists(atPath: netDirectory) { startNet(key: nil) }
+        // Only a Mac that is in a fleet over that network, or hosts one, has a use for it.
+        if FileManager.default.fileExists(atPath: netDirectory), identity?.viaPrivateNetwork == true || hubConfig.authKey != nil { startNet(key: nil) }
         if settings.hostHub { startHub() }
         syncUploader()
         settings.$fleetReportingPaused.dropFirst().removeDuplicates().receive(on: RunLoop.main).sink { [weak self] _ in self?.syncUploader() }.store(in: &cancellables)
@@ -169,22 +172,30 @@ final class FleetController: ObservableObject {
                 }
                 guard proxy != nil else { self?.finishJoin(error: "Could not reach the fleet's network. Check this Mac's internet connection and try again."); return }
             }
-            let client = HubClient(baseURL: code.hub, transport: URLSessionTransport(timeout: 8, proxy: proxy))
+            // Over the private network the first connection between two Macs on different networks is set up through a
+            // relay and can take a while, so keep trying for a minute and a half before giving up.
+            let client = HubClient(baseURL: code.hub, transport: URLSessionTransport(timeout: overNet ? 15 : 8, proxy: proxy))
             var result = client.enroll(code: code.token, request: request)
-            for _ in 0..<2 where result == .failure(.unreachable) { result = client.enroll(code: code.token, request: request) }
+            let deadline = Date().addingTimeInterval(overNet ? 90 : 16)
+            while result == .failure(.unreachable), Date() < deadline {
+                if overNet { DispatchQueue.main.async { self?.joinProgress = "Connecting to the hub over the fleet's network. This can take a minute…" } }
+                Thread.sleep(forTimeInterval: 2)
+                result = client.enroll(code: code.token, request: request)
+            }
             switch result {
             case .success(let reply):
                 let id = HostIdentity(hostUUID: uuid, name: shownName, hubURL: code.hub, hostToken: reply.hostToken, readerToken: reply.readerToken, viaPrivateNetwork: overNet ? true : nil)
                 do { try id.save() } catch { self?.finishJoin(error: "Joined, but could not save this Mac's fleet identity: \(error.localizedDescription)"); return }
                 DispatchQueue.main.async {
                     guard let self else { return }
-                    self.identity = id; self.joining = false
+                    self.identity = id; self.joining = false; self.joinProgress = nil
                     self.settings.fleetReportingPaused = false
                     self.syncUploader()
                     self.pollHosts()
                     FileLog.shared.log("fleet: joined \(code.hub) as \(shownName)")
                 }
             case .failure(.unreachable):
+                if let proxy, let why = FleetController.diagnose(hub: code.hub, proxy: proxy) { self?.finishJoin(error: why); return }
                 self?.finishJoin(error: "No answer from the hub at \(code.hub). Check that the hub Mac is on and that this Mac can reach it.")
             case .failure(.rejected(let status, let message)):
                 self?.finishJoin(error: status == 401 ? "This pairing code was already used or has expired. Ask for a new one." : message)
@@ -194,10 +205,35 @@ final class FleetController: ObservableObject {
 
     private func finishJoin(error: String) {
         DispatchQueue.main.async {
-            self.joining = false; self.joinError = error
-            // A helper started only for this attempt has nothing to do now.
-            if self.identity?.viaPrivateNetwork != true, !self.settings.hostHub { self.stopNet(forget: true) }
+            self.joining = false; self.joinError = error; self.joinProgress = nil
+            FileLog.shared.log("fleet: join failed: \(error)")
+            // A helper started only for this attempt has nothing to do now. Its state is kept, so that trying again
+            // is quick and does not add another device to the fleet's network.
+            if self.identity?.viaPrivateNetwork != true, !self.settings.hostHub { self.stopNet(forget: false) }
         }
+    }
+
+    /// Asks the network helper why the hub does not answer, so the message can say which side to look at.
+    private static func diagnose(hub: String, proxy: String) -> String? {
+        guard let host = URLComponents(string: hub)?.host else { return nil }
+        let transport = URLSessionTransport(timeout: 20, proxy: proxy)
+        guard let reply = transport.send(HubRequest(method: "GET", path: "/check", query: ["ip": host]), to: "http://utmwatch.diag"),
+              let d = (try? JSONSerialization.jsonObject(with: reply.body)) as? [String: Any] else { return nil }
+        let relay = d["relay"] as? String ?? "", pingError = d["pingError"] as? String ?? "", via = d["pingVia"] as? String ?? ""
+        FileLog.shared.log("fleet: network check: relay \(relay.isEmpty ? "none" : relay), hub known \(d["peerKnown"] as? Bool ?? false), hub online \(d["peerOnline"] as? Bool ?? false), ping \(via.isEmpty ? "failed: \(pingError)" : via)")
+        if relay.isEmpty {
+            return "This Mac joined the fleet's network but cannot reach its relay servers, so it cannot find the hub. The network this Mac is on may block them: try another network, such as a phone hotspot, then join again."
+        }
+        if d["peerKnown"] as? Bool != true {
+            return "The hub in this pairing code is not on the fleet's network any more. Ask for a new pairing code."
+        }
+        if d["peerOnline"] as? Bool != true {
+            return "The hub Mac is not connected to the fleet's network. Check that it is on, awake and running UTM Watch, then join again."
+        }
+        if via.isEmpty {
+            return "This Mac and the hub Mac are both on the fleet's network but could not connect to each other. Wait a minute and join again; if it keeps failing, one of the two networks is blocking the connection."
+        }
+        return "This Mac can reach the hub Mac, but the hub did not answer. On the hub Mac, switch “Host the hub on this Mac” off and on, then join again."
     }
 
     /// Stops reporting and forgets the hub. History already on the hub stays there until it ages out.
@@ -370,6 +406,15 @@ final class FleetController: ObservableObject {
             return
         }
         stopNet(forget: false)
+        // State left by an earlier attempt belongs to the key it was made with; a different key means a different fleet.
+        if let key {
+            let mark = (netDirectory as NSString).appendingPathComponent("key-id"), id = FleetToken.hash(key)
+            if let made = try? String(contentsOfFile: mark, encoding: .utf8), made != id {
+                try? FileManager.default.removeItem(atPath: netDirectory)
+            }
+            try? FileManager.default.createDirectory(atPath: netDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try? id.write(toFile: mark, atomically: true, encoding: .utf8)
+        }
         net = .starting
         let p = Process()
         p.executableURL = binary

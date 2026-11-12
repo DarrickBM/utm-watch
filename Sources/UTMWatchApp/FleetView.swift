@@ -397,7 +397,7 @@ struct FleetSettingsSection: View {
             }
         } label: {
             Text("Join a fleet")
-            Text(fleet.joinError ?? "Paste the pairing code from the Mac that hosts the hub").foregroundStyle(fleet.joinError == nil ? Color.secondary : Color.orange)
+            Text(fleet.joinError ?? fleet.joinProgress ?? "Paste the pairing code from the Mac that hosts the hub").foregroundStyle(fleet.joinError == nil ? Color.secondary : Color.orange)
         }
         hostToggle
     }
@@ -437,7 +437,7 @@ struct FleetSettingsSection: View {
             }
         } label: {
             Text("Enter a new code")
-            Text(fleet.joinError ?? "To rejoin, or to move this Mac to another fleet").foregroundStyle(fleet.joinError == nil ? Color.secondary : Color.orange)
+            Text(fleet.joinError ?? fleet.joinProgress ?? "To rejoin, or to move this Mac to another fleet").foregroundStyle(fleet.joinError == nil ? Color.secondary : Color.orange)
         }
         LabeledContent {
             Button("Leave fleet…", role: .destructive) { confirmLeave = true }

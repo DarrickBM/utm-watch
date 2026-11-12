@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"time"
 
 	"tailscale.com/net/socks5"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -283,6 +285,8 @@ func serveProxy(ln net.Listener, srv *tsnet.Server) {
 		ReadHeaderTimeout: 10 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
+			case r.URL.Host == diagHost:
+				handleDiag(w, r, srv)
 			case r.Method == http.MethodConnect:
 				handleConnect(w, r, srv)
 			case r.URL.IsAbs():
@@ -316,6 +320,67 @@ func serveProxy(ln net.Listener, srv *tsnet.Server) {
 				httpLn.ch <- pc
 			}
 		}()
+	}
+}
+
+// diagHost is a name the proxy answers itself: http://utmwatch.diag/check?ip=<tailnet address> says whether this
+// node is connected to a relay and whether that peer answers, so the app can tell the user which side is at fault.
+const diagHost = "utmwatch.diag"
+
+type diagReply struct {
+	Relay     string   `json:"relay"`               // this node's home relay region; empty = no relay connection
+	Health    []string `json:"health,omitempty"`    // problems the node itself reports
+	PeerKnown bool     `json:"peerKnown"`           // the address belongs to a device on this network
+	PeerOn    bool     `json:"peerOnline"`          // the coordination server sees that device connected
+	PingVia   string   `json:"pingVia,omitempty"`   // "direct" or "relay:<region>"
+	PingMs    float64  `json:"pingMs,omitempty"`
+	PingError string   `json:"pingError,omitempty"`
+}
+
+func handleDiag(w http.ResponseWriter, r *http.Request, srv *tsnet.Server) {
+	var out diagReply
+	defer func() {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+	}()
+	lc, err := srv.LocalClient()
+	if err != nil {
+		out.PingError = err.Error()
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	ip, ipErr := netip.ParseAddr(r.URL.Query().Get("ip"))
+	if st, err := lc.Status(ctx); err == nil {
+		out.Health = st.Health
+		if st.Self != nil {
+			out.Relay = st.Self.Relay
+		}
+		for _, p := range st.Peer {
+			for _, a := range p.TailscaleIPs {
+				if ipErr == nil && a == ip {
+					out.PeerKnown, out.PeerOn = true, p.Online
+				}
+			}
+		}
+	}
+	if ipErr != nil {
+		out.PingError = "no address given"
+		return
+	}
+	pr, err := lc.Ping(ctx, ip, tailcfg.PingDisco)
+	switch {
+	case err != nil:
+		out.PingError = err.Error()
+	case pr.Err != "":
+		out.PingError = pr.Err
+	default:
+		out.PingMs = pr.LatencySeconds * 1000
+		if pr.Endpoint != "" {
+			out.PingVia = "direct"
+		} else {
+			out.PingVia = "relay:" + pr.DERPRegionCode
+		}
 	}
 }
 
