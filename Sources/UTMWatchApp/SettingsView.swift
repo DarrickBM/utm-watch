@@ -104,8 +104,9 @@ struct SettingsView: View {
                 LabeledContent {
                     status(utmStatus.ok, utmStatus.text)
                 } label: { Text("Control UTM"); Text("VM names and states") }
-                // One row for the one permission. Refused, it is named after the way to grant it: the ordinary prompt
+                // One row for the one permission, always named after the sure way to grant it: the ordinary prompt
                 // ("data from other apps") can stay refused after Allow on some Macs, and Full Disk Access cannot.
+                // It reads "Granted" whenever the files can be read, whichever of the two let them be.
                 LabeledContent {
                     VStack(alignment: .trailing, spacing: 6) {
                         status(filesStatus.ok, filesStatus.text)
@@ -114,13 +115,8 @@ struct SettingsView: View {
                         }
                     }
                 } label: {
-                    if filesStatus.denied {
-                        Text("Full Disk Access")
-                        Text("Lets UTM Watch read UTM's VM files to see which VMs run macOS.")
-                    } else {
-                        Text("Read UTM's VM files")
-                        Text("Which VMs run macOS; also limits and network mapping when UTM cannot be asked")
-                    }
+                    Text("Full Disk Access")
+                    Text("Lets UTM Watch read UTM's VM files to see which VMs run macOS.")
                 }
                 if filesStatus.denied || utmStatus.text == "Denied" {
                     LabeledContent {
