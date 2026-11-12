@@ -19,6 +19,8 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 
 - **AI diagnosis** through a read-only MCP server: ask an agent such as Claude why a VM was slow, on this Mac or any Mac in the fleet, and it reads the history and tells you.
 
+  ![Claude answering why the VMs were slow, from UTM Watch's history](docs/images/ai-diagnosis.png)
+
 UTM Watch is an independent project. It is not affiliated with or endorsed by the UTM project. Licensed under the MIT License; see `LICENSE`.
 
 ## Install
