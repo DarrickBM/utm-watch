@@ -9,7 +9,8 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 - **Every VM by name**, with CPU, memory, network, disk and ping, live in the menu bar.
 - **Recorded history** you can scrub back through, to see exactly what was happening at a past moment.
 - **The whole connection path**: ping to each VM, to your router and to the internet, plus Wi-Fi or Ethernet link quality, so you can tell a slow VM from a slow network.
-- **AI diagnosis** through a read-only MCP server: ask an agent such as Claude why a VM was slow, and it reads the history and tells you.
+- **Fleets**: several Macs report to one hub, and one window shows every Mac and its VMs. Free, with no accounts.
+- **AI diagnosis** through a read-only MCP server: ask an agent such as Claude why a VM was slow, on this Mac or any Mac in the fleet, and it reads the history and tells you.
 
 <p>
   <img src="docs/images/hover-brief.png" width="380" alt="Hover brief under the menu bar item">
@@ -171,6 +172,8 @@ On first launch macOS asks for three permissions: access to data from other apps
 
 UTM Watch on one Mac needs nothing below. With several Macs, one of them hosts a **hub** and the others report to it;
 the hub Mac can then open **Open Fleet** from the menu bar item and see every Mac's VMs, and click a Mac for its history. The other Macs only report: they cannot see the fleet.
+
+![The Fleet window on the hub Mac: every Mac with its VMs](docs/images/fleet-view.png)
 
 1. On the Mac that will host the hub: Settings › Fleet › **Host the hub on this Mac**, then **New pairing code**.
 2. On each other Mac: Settings › Fleet, paste the code, **Join**. A code adds one Mac and works once, for 15 minutes.
