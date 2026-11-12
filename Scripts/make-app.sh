@@ -11,6 +11,11 @@ BUNDLE_ID="com.darrick.utmwatch"
 VERSION="${VERSION:-0.6.0}"
 # The build number tells apart builds that share a version, such as successive betas: the number of commits.
 BUILD="${BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
+# BETA=6 marks the build as beta 6 of VERSION. The updater reads it to tell betas of one version apart, and a beta
+# build follows the beta channel. Unset for a final release.
+BETA="${BETA:-}"
+BETA_KEY=""
+if [ -n "$BETA" ]; then BETA_KEY="<key>UTMWatchBeta</key><integer>${BETA}</integer>"; fi
 
 swift build -c release --product UTMWatchApp
 swift build -c release --product utmwatch-mcp
@@ -53,6 +58,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD}</string>
+  ${BETA_KEY}
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>UTM Watch pings your router and your virtual machines to measure how responsive they are.</string>

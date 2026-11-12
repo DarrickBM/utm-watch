@@ -17,6 +17,17 @@ final class AppSettings: ObservableObject {
     /// Off hides VMs that do not belong to UTM (Docker Desktop, Tart, ...) from every view. They are still recorded.
     @Published var showOtherVMs: Bool { didSet { defaults.set(showOtherVMs, forKey: "showOtherVMs") } }
     @Published var checkForUpdates: Bool { didSet { defaults.set(checkForUpdates, forKey: "checkForUpdates") } }
+    /// Updates include betas. Unless set by hand, a beta build follows the betas and a final release does not, so a
+    /// Mac on a beta moves to each next beta and then to the final release, and stays on releases from there.
+    var betaUpdates: Bool { defaults.object(forKey: "betaUpdates") as? Bool ?? (AppSettings.buildBeta != nil) }
+
+    /// The beta number this copy was built as (Info.plist "UTMWatchBeta"); nil for a final release.
+    static let buildBeta: Int? = beta(in: Bundle.main.infoDictionary)
+
+    static func beta(in info: [String: Any]?) -> Int? {
+        let n = (info?["UTMWatchBeta"] as? Int) ?? (info?["UTMWatchBeta"] as? String).flatMap { Int($0) }
+        return n.flatMap { $0 > 0 ? $0 : nil }
+    }
     /// Fleet: this Mac runs the hub the other Macs report to.
     @Published var hostHub: Bool { didSet { defaults.set(hostHub, forKey: "hostHub") } }
     @Published var hubPort: Int { didSet { defaults.set(hubPort, forKey: "hubPort") } }

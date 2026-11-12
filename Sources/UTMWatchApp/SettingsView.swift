@@ -105,9 +105,14 @@ struct SettingsView: View {
                     status(utmStatus.ok, utmStatus.text)
                 } label: { Text("Control UTM"); Text("VM names and states") }
                 LabeledContent {
-                    status(filesStatus.ok, filesStatus.text)
-                } label: { Text("Read UTM's VM files"); Text("CPU and memory limits, network mapping") }
-                if filesStatus.denied || utmStatus.text == "Denied" {
+                    // UTM reports the same settings itself, so a refusal here costs nothing while UTM can be asked.
+                    if filesStatus.denied && utmStatus.ok { status(true, "Not needed") } else { status(filesStatus.ok, filesStatus.text) }
+                } label: {
+                    Text("Read UTM's VM files")
+                    Text(filesStatus.denied && utmStatus.ok ? "macOS refuses this, so limits and network mapping come from UTM itself"
+                                                            : "CPU and memory limits, network mapping")
+                }
+                if utmStatus.text == "Denied" {
                     LabeledContent {
                         Button("Reset and ask again…") { confirmReset = true }
                             .confirmationDialog("Reset UTM Watch's permissions?", isPresented: $confirmReset) {
@@ -132,6 +137,7 @@ struct SettingsView: View {
             Section {
                 HStack {
                     Text("UTM Watch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")"
+                         + (AppSettings.buildBeta.map { " beta \($0)" } ?? "")
                          + ((Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String).map { " (build \($0))" } ?? ""))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -161,12 +167,21 @@ struct SettingsView: View {
         return (true, "Granted")
     }
 
+    private static var lastFilesError: String?
+
     /// A missing folder is not a refusal: UTM may not be installed, or may never have made a VM.
     private var filesStatus: (ok: Bool, text: String, denied: Bool) {
         do {
             _ = try FileManager.default.contentsOfDirectory(atPath: UTMBundles.defaultDirectory.path)
             return (true, "Granted", false)
         } catch let error as NSError {
+            // Logged once per distinct error: this runs on every redraw, and the exact refusal is what tells a
+            // privacy denial from anything else.
+            let why = "\(error.domain) \(error.code)" + ((error.userInfo[NSUnderlyingErrorKey] as? NSError).map { ", underlying \($0.domain) \($0.code)" } ?? "")
+            if SettingsView.lastFilesError != why {
+                SettingsView.lastFilesError = why
+                FileLog.shared.log("permissions: UTM's VM folder cannot be listed: \(why)")
+            }
             let missing = error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError
             return missing ? (false, "UTM has no VM folder here", false) : (false, "Not granted", true)
         }

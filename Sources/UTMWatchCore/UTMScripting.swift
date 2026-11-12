@@ -5,6 +5,20 @@ public struct UTMListedVM: Codable, Equatable {
     public var name: String
     public var status: String
     public var backend: String
+    /// The VM's settings as UTM reports them: nil from a UTM too old to say, or for a VM it could not describe.
+    /// They stand in for config.plist when macOS will not let this app read UTM's folder.
+    public var cpuCores: Int?
+    public var memoryMB: Int?
+    public var macs: [String]?
+
+    public init(id: String, name: String, status: String, backend: String, cpuCores: Int? = nil, memoryMB: Int? = nil, macs: [String]? = nil) {
+        self.id = id; self.name = name; self.status = status; self.backend = backend
+        self.cpuCores = cpuCores; self.memoryMB = memoryMB; self.macs = macs
+    }
+}
+
+extension UTMListedVM {
+    public var memoryBytes: UInt64? { memoryMB.flatMap { $0 > 0 ? UInt64($0) * 1024 * 1024 : nil } }
 }
 
 public enum UTMScriptingError: Error, Equatable {
@@ -27,7 +41,16 @@ public enum UTMScripting {
     const app = Application("UTM");
     if (!app.running()) { "NOT_RUNNING"; } else {
       const vms = app.virtualMachines();
-      JSON.stringify(vms.map(vm => ({ id: vm.id(), name: vm.name(), status: vm.status(), backend: vm.backend() })));
+      JSON.stringify(vms.map(vm => {
+        const o = { id: vm.id(), name: vm.name(), status: vm.status(), backend: vm.backend() };
+        try {
+          const c = vm.configuration();
+          if (c.cpuCores > 0) o.cpuCores = c.cpuCores;
+          if (c.memory > 0) o.memoryMB = c.memory;
+          o.macs = (c.networkInterfaces || []).map(n => n.address).filter(a => a);
+        } catch (e) {}
+        return o;
+      }));
     }
     """
 

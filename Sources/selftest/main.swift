@@ -94,6 +94,9 @@ do {
 
     let list = try? UTMScripting.parse(#"[{"id":"B390","name":"macOS 26","status":"started","backend":"apple"}]"#)
     check(list?.count == 1 && VMStatus(utmStatus: list![0].status) == .running, "UTM JSON parsed; started -> running")
+    let withSettings = try? UTMScripting.parse(#"[{"id":"B390","name":"macOS 26","status":"started","backend":"apple","cpuCores":6,"memoryMB":8192,"macs":["E6:88:A0:15:2A:6C"]}]"#)
+    check(withSettings?.first?.cpuCores == 6 && withSettings?.first?.memoryBytes == 8192 * 1024 * 1024 && withSettings?.first?.macs == ["E6:88:A0:15:2A:6C"]
+          && list?.first?.cpuCores == nil && list?.first?.memoryBytes == nil, "UTM's list carries each VM's settings when UTM reports them, and reads without them")
     check(VMStatus(utmStatus: "stopped") == .stopped && VMStatus(utmStatus: "weird") == .unknown, "status mapping")
 }
 
@@ -344,6 +347,20 @@ do {
     check(r?.version == "0.5.0" && r?.appZip.lastPathComponent == "UTMWatch-0.5.0-macos-arm64.zip", "release parsed: version and app zip")
     check(ReleaseInfo.parse(Data(#"{"tag_name":"v0.5.0","assets":[]}"#.utf8)) == nil, "a release without the app zip is ignored")
     check(ReleaseInfo.parse(Data(json.replacingOccurrences(of: "https://example.com/UTM", with: "http://example.com/UTM").utf8)) == nil, "a download that is not https is ignored")
+    check(AppVersion.isNewer("0.6.0", beta: 6, than: "0.6.0", beta: 5) && !AppVersion.isNewer("0.6.0", beta: 5, than: "0.6.0", beta: 5), "a later beta is newer, the same beta is not")
+    check(AppVersion.isNewer("0.6.0", beta: nil, than: "0.6.0", beta: 5) && !AppVersion.isNewer("0.6.0", beta: 9, than: "0.6.0", beta: nil), "the final release follows its betas")
+    check(AppVersion.isNewer("0.6.0", beta: 1, than: "0.5.0", beta: nil) && !AppVersion.isNewer("0.6.0", beta: 1, than: "0.6.1", beta: nil), "the version outranks the beta number")
+    func entry(_ tag: String, draft: Bool = false) -> String {
+        #"{"tag_name":"\#(tag)","draft":\#(draft),"prerelease":\#(tag.contains("-")),"assets":[{"name":"SHA256SUMS.txt","browser_download_url":"https://example.com/\#(tag)/SHA256SUMS.txt"},{"name":"UTMWatch-0.6.0-macos-arm64.zip","browser_download_url":"https://example.com/\#(tag)/UTMWatch-0.6.0-macos-arm64.zip"}]}"#
+    }
+    let list = Data(("[" + [entry("v0.6.0-beta.4"), entry("v0.6.0-beta.10"), entry("v0.6.0-beta.9"), entry("v0.7.0-beta.1", draft: true), entry("v0.6.0-rc.1"), entry("v0.5.0")].joined(separator: ",") + "]").utf8)
+    let newestBeta = ReleaseInfo.newest(inList: list, includeBetas: true)
+    check(newestBeta?.version == "0.6.0" && newestBeta?.beta == 10 && newestBeta?.label == "0.6.0 beta 10", "beta channel: the highest beta wins, drafts and unknown kinds are skipped")
+    check(newestBeta?.appZip.absoluteString.contains("v0.6.0-beta.10") == true, "beta channel: the download is that beta's own file")
+    check(ReleaseInfo.newest(inList: list, includeBetas: false)?.label == "0.5.0", "without betas the list gives the newest final release")
+    let withFinal = Data(("[" + [entry("v0.6.0-beta.10"), entry("v0.6.0")].joined(separator: ",") + "]").utf8)
+    check(ReleaseInfo.newest(inList: withFinal, includeBetas: true)?.beta == nil, "beta channel: the final release outranks its betas")
+    check(r?.beta == nil && ReleaseInfo.parse(Data(entry("v0.6.0-beta.0").utf8)) == nil, "a final release has no beta number; beta 0 is not a release")
     let sums = String(repeating: "a", count: 64) + "  UTMWatch-0.5.0-macos-arm64.dmg\n" + String(repeating: "B", count: 64) + "  UTMWatch-0.5.0-macos-arm64.zip\n"
     check(ReleaseInfo.checksum(for: "UTMWatch-0.5.0-macos-arm64.zip", in: sums) == String(repeating: "b", count: 64), "checksum found by file name")
     check(ReleaseInfo.checksum(for: "other.zip", in: sums) == nil, "no checksum for an unlisted file")

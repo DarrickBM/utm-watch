@@ -29,7 +29,12 @@ public enum UTMBundles {
             .appendingPathComponent("Library/Containers/com.utmapp.UTM/Data/Documents", isDirectory: true)
     }
 
+    /// Testing aid: `UTMWATCH_NO_UTM_FILES=1` behaves as if macOS refused access to UTM's folder, while UTM is still
+    /// asked for its list, to exercise the settings UTM itself reports.
+    public static let filesDisabled = ProcessInfo.processInfo.environment["UTMWATCH_NO_UTM_FILES"] == "1"
+
     public static func scan(directory: URL = defaultDirectory) -> [UTMBundle] {
+        if filesDisabled { return [] }
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil,
                                                       options: [.skipsHiddenFiles]) else { return [] }
@@ -40,7 +45,7 @@ public enum UTMBundles {
     /// Loads a bundle; falls back to the folder name if config.plist is missing or unreadable (PRD R4).
     public static func load(url: URL) -> UTMBundle? {
         // A trial copy knows a running VM by its folder name only, without opening anything inside UTM's folder.
-        if disabled {
+        if disabled || filesDisabled {
             return UTMBundle(url: url, uuid: nil, name: url.deletingPathExtension().lastPathComponent, backend: .unknown,
                              cpuCount: nil, memoryBytes: nil, macAddresses: [], networkModes: [], isMacOS: false)
         }

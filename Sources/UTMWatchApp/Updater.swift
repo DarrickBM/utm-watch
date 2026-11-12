@@ -14,6 +14,8 @@ final class Updater: ObservableObject {
     @Published private(set) var state: State = .idle
 
     private static let latestURL = URL(string: "https://api.github.com/repos/DarrickBM/utm-watch/releases/latest")!
+    /// "Latest" leaves pre-releases out, so the beta channel reads the list of recent releases instead.
+    private static let listURL = URL(string: "https://api.github.com/repos/DarrickBM/utm-watch/releases?per_page=30")!
     private let settings: AppSettings
     private var release: ReleaseInfo?
     private var timer: Timer?
@@ -27,6 +29,15 @@ final class Updater: ObservableObject {
         return ProcessInfo.processInfo.environment["UTMWATCH_PRETEND_VERSION"]
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     }
+
+    /// The beta number of this copy, nil for a final release. UTMWATCH_PRETEND_BETA overrides it for testing.
+    var currentBeta: Int? {
+        if let pretend = ProcessInfo.processInfo.environment["UTMWATCH_PRETEND_BETA"] { return Int(pretend).flatMap { $0 > 0 ? $0 : nil } }
+        return AppSettings.buildBeta
+    }
+
+    /// The version as shown to the user: "0.6.0" or "0.6.0 beta 5".
+    var currentLabel: String? { currentVersion.map { AppVersion.label($0, beta: currentBeta) } }
 
     /// Checks shortly after launch and then once a day, while the setting is on.
     func start() {
@@ -44,16 +55,18 @@ final class Updater: ObservableObject {
 
     enum CheckResult { case upToDate(String), available(String), failed(String), unavailable }
 
-    /// Asks GitHub for the latest release. The request carries nothing about this Mac or its VMs.
+    /// Asks GitHub for the latest release, or on the beta channel for the newest release of either kind.
+    /// The request carries nothing about this Mac or its VMs.
     func check(completion: @escaping (CheckResult) -> Void) {
-        guard let current = currentVersion else { completion(.unavailable); return }
+        guard let current = currentVersion, let currentLabel else { completion(.unavailable); return }
         if case .updating = state { return }
-        var request = URLRequest(url: Self.latestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        let currentBeta = currentBeta, betas = settings.betaUpdates
+        var request = URLRequest(url: betas ? Self.listURL : Self.latestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("UTMWatch", forHTTPHeaderField: "User-Agent")
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
-            let found = ok ? data.flatMap(ReleaseInfo.parse) : nil
+            let found = ok ? data.flatMap { betas ? ReleaseInfo.newest(inList: $0, includeBetas: true) : ReleaseInfo.parse($0) } : nil
             DispatchQueue.main.async {
                 guard let self else { return }
                 guard let found else {
@@ -62,16 +75,17 @@ final class Updater: ObservableObject {
                     completion(.failed(why))
                     return
                 }
-                if AppVersion.isNewer(found.version, than: current) {
+                let channel = betas ? "beta channel" : "release channel"
+                if AppVersion.isNewer(found.version, beta: found.beta, than: current, beta: currentBeta) {
                     self.release = found
-                    if case .updating = self.state {} else { self.state = .available(found.version) }
-                    FileLog.shared.log("update available: \(found.version) (running \(current))")
-                    completion(.available(found.version))
+                    if case .updating = self.state {} else { self.state = .available(found.label) }
+                    FileLog.shared.log("update available: \(found.label) (running \(currentLabel), \(channel))")
+                    completion(.available(found.label))
                 } else {
                     self.release = nil
                     if case .updating = self.state {} else { self.state = .idle }
-                    FileLog.shared.log("update check: \(current) is current (latest \(found.version))")
-                    completion(.upToDate(current))
+                    FileLog.shared.log("update check: \(currentLabel) is current (newest \(found.label), \(channel))")
+                    completion(.upToDate(currentLabel))
                 }
             }
         }.resume()
@@ -121,7 +135,7 @@ final class Updater: ObservableObject {
                     let alert = NSAlert()
                     alert.alertStyle = .warning
                     alert.messageText = "The update could not be installed"
-                    alert.informativeText = "\(why)\n\nUTM Watch \(self?.currentVersion ?? "") keeps running. You can also download the new version from the project's releases page."
+                    alert.informativeText = "\(why)\n\nUTM Watch \(self?.currentLabel ?? "") keeps running. You can also download the new version from the project's releases page."
                     NSApp.activate(ignoringOtherApps: true)
                     alert.runModal()
                 }
@@ -158,8 +172,9 @@ final class Updater: ObservableObject {
         let fresh = unpacked.appendingPathComponent("UTMWatch.app")
         guard let info = NSDictionary(contentsOf: fresh.appendingPathComponent("Contents/Info.plist")),
               info["CFBundleIdentifier"] as? String == bundleID,
-              info["CFBundleShortVersionString"] as? String == release.version else {
-            throw UpdateError(message: "The download is not UTM Watch \(release.version).")
+              info["CFBundleShortVersionString"] as? String == release.version,
+              AppSettings.beta(in: info as? [String: Any]) == release.beta else {
+            throw UpdateError(message: "The download is not UTM Watch \(release.label).")
         }
         try? run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", fresh.path])
         do {
@@ -187,6 +202,7 @@ final class Updater: ObservableObject {
         // The helper must not inherit the test override, or the new copy would offer the update again.
         var env = ProcessInfo.processInfo.environment
         env["UTMWATCH_PRETEND_VERSION"] = nil
+        env["UTMWATCH_PRETEND_BETA"] = nil
         p.environment = env
         do { try p.run() } catch { FileLog.shared.log("update: could not schedule the restart: \(error)") }
         FileLog.shared.log("update: installed, restarting")

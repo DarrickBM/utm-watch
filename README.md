@@ -21,6 +21,8 @@ To give a VM your own name, such as a customer's name, hover its name in the ful
 
 UTM Watch looks for a newer release once a day. When there is one, an arrow appears in the menu bar item and an **Update** button beside the title in the hover brief; one click downloads it, replaces the app and restarts it. The check asks GitHub for the latest release and sends nothing about your Mac or its VMs. You can turn it off in Settings.
 
+A beta build updates along the betas: it moves to each next beta and then to the final release, and from there follows final releases only. A final release never offers a beta. To change that by hand, run `defaults write com.darrick.utmwatch betaUpdates -bool YES` (or `NO`) and restart the app.
+
 ![UTM Watch detail window, live](docs/images/detail-live.png)
 
 UTM Watch is an independent project. It is not affiliated with or endorsed by the UTM project. Licensed under the MIT License; see `LICENSE`.

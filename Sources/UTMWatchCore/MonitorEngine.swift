@@ -190,16 +190,18 @@ public final class MonitorEngine {
                 let listed = utmEntry(for: b)
                 var status = listed.map { VMStatus(utmStatus: $0.status) } ?? .running
                 if status == .stopped || status == .unknown { status = .running } // process exists, list is stale
-                let iface = b.macAddresses.compactMap { macToInterface[$0] }.first
+                // What config.plist did not give (unread, or unreadable without the privacy permission), UTM does.
+                let macs = b.macAddresses.isEmpty ? (listed?.macs ?? []).map(MACAddress.normalize) : b.macAddresses
+                let iface = macs.compactMap { macToInterface[$0] }.first
                 let counter = iface.flatMap { counters[$0] }
                 let rate = iface.flatMap { rates[$0] }
                 let swap = options.swapDirections
-                newTargets.append((b.identity, b.name, b.macAddresses))
+                newTargets.append((b.identity, b.name, macs))
                 var row = VMRow(
                     id: b.identity, name: b.name, backend: b.backend == .unknown ? proc.backend : b.backend,
                     status: status, pid: proc.pid, identified: true, isMacOS: b.isMacOS,
-                    cpuCores: u?.cpuCores, cpuAllocated: b.cpuCount,
-                    memoryBytes: u?.footprint, memoryAllocatedBytes: b.memoryBytes, interface: iface,
+                    cpuCores: u?.cpuCores, cpuAllocated: b.cpuCount ?? listed?.cpuCores,
+                    memoryBytes: u?.footprint, memoryAllocatedBytes: b.memoryBytes ?? listed?.memoryBytes, interface: iface,
                     downRate: rate.map { swap ? $0.ibytesPerSecond : $0.obytesPerSecond },
                     upRate: rate.map { swap ? $0.obytesPerSecond : $0.ibytesPerSecond },
                     downTotal: counter.map { swap ? $0.ibytes : $0.obytes },
@@ -231,13 +233,15 @@ public final class MonitorEngine {
             let listed = utmEntry(for: b)
             let status = listed.map { VMStatus(utmStatus: $0.status) } ?? .stopped
             rows.append(VMRow(id: b.identity, name: b.name, backend: b.backend, status: status, identified: true,
-                              isMacOS: b.isMacOS, cpuAllocated: b.cpuCount, memoryAllocatedBytes: b.memoryBytes))
+                              isMacOS: b.isMacOS, cpuAllocated: b.cpuCount ?? listed?.cpuCores,
+                              memoryAllocatedBytes: b.memoryBytes ?? listed?.memoryBytes))
         }
         // UTM knows about VMs stored outside the default folder.
         let coveredIds = Set(rows.map(\.id)), coveredNames = Set(rows.map(\.name))
         for entry in utmList ?? [] where !coveredIds.contains(entry.id) && !coveredNames.contains(entry.name) {
             let backend: VMBackend = entry.backend.lowercased() == "apple" ? .apple : entry.backend.lowercased() == "qemu" ? .qemu : .unknown
-            rows.append(VMRow(id: entry.id, name: entry.name, backend: backend, status: VMStatus(utmStatus: entry.status), identified: true))
+            rows.append(VMRow(id: entry.id, name: entry.name, backend: backend, status: VMStatus(utmStatus: entry.status), identified: true,
+                              cpuAllocated: entry.cpuCores, memoryAllocatedBytes: entry.memoryBytes))
         }
 
         // 5. Host summary.
