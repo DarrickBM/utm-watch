@@ -2,20 +2,20 @@
 
 See what each of your [UTM](https://mac.getutm.app) virtual machines is really doing, and find out why one was slow.
 
-![UTM Watch detail window with a pinned moment](docs/images/detail-pinned.png)
+![UTM Watch detail window with a pinned moment](docs/images/detail-window-pinned.png)
 
 UTM shows whether a VM is on or off. Activity Monitor shows two processes with the same name. Neither tells you which VM is eating the CPU, how close you are to running out of memory, or whether the lag your remote user felt came from the VM, the Mac, or the Wi-Fi. UTM Watch does.
 
-- **Every VM by name**, with CPU, memory, network, disk and ping, live in the menu bar.
+- **Every VM by name**, with CPU, memory, how full its disk is, network and ping, live in the menu bar.
 - **A quick look without opening a window**: hover the menu bar item for every VM and the Mac at a glance. Click it for the full window.
 
-  <p align="center"><img src="docs/images/menu-bar-quick-look.png" width="513" alt="The menu bar item with its hover brief below"></p>
+  <p align="center"><img src="docs/images/menu-bar-item.png" width="513" alt="The menu bar item with its hover brief below"></p>
 
 - **Recorded history** you can scrub back through, to see exactly what was happening at a past moment.
 - **The whole connection path**: ping to each VM, to your router and to the internet, plus Wi-Fi or Ethernet link quality, so you can tell a slow VM from a slow network.
 - **Fleets**: several Macs report to one hub, and one window shows every Mac and its VMs. Free, with no accounts.
 
-  ![The Fleet window on the hub Mac: every Mac with its VMs](docs/images/fleet-view.png)
+  ![The Fleet window on the hub Mac: every Mac with its VMs](docs/images/fleet-window.png)
 
 - **AI diagnosis** through a read-only MCP server: ask an agent such as Claude why a VM was slow, on this Mac or any Mac in the fleet, and it reads the history and tells you.
 
