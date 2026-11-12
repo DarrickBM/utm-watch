@@ -45,7 +45,7 @@ switch args.first {
 case "token":
     guard args.dropFirst().first == "create" else { fail(usage) }
     if flag("--enroll") {
-        print(store.createEnrollToken(now: nowMs()))
+        print(store.createEnrollToken(now: nowMs(), view: flag("--view")))
     } else if flag("--reader") {
         print(store.createReaderToken(label: args.dropFirst(2).first ?? "reader", now: nowMs()))
     } else { fail(usage) }

@@ -9,6 +9,8 @@ final class StatusItemController: NSObject {
     var onOpenDetails: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onOpenFleet: (() -> Void)?
+    /// Whether the menu offers the fleet window: not on a Mac that only reports to a fleet.
+    var offersFleet: (() -> Bool)?
 
     private let model: AppModel
     private let settings: AppSettings
@@ -121,7 +123,9 @@ final class StatusItemController: NSObject {
             menu.addItem(.separator())
         }
         menu.addItem(withTitle: "Open UTM Watch", action: #selector(openDetails), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Open Fleet", action: #selector(openFleet), keyEquivalent: "").target = self
+        if offersFleet?() ?? true {
+            menu.addItem(withTitle: "Open Fleet", action: #selector(openFleet), keyEquivalent: "").target = self
+        }
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         if updater.currentVersion != nil {
             menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self

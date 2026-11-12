@@ -484,14 +484,30 @@ do {
         // Pairing codes, the Mac's own reader token, and going offline on the timeline
         let packed = PairingCode(hub: "http://mini.local:8787", token: "e_abc", authKey: "tskey-auth-x")
         check(PairingCode(text: "  " + packed.text + "\n") == packed && PairingCode(text: "e_abc") == nil && PairingCode(text: "utmw1.!!") == nil, "a pairing code packs the hub, token and network key into one string")
-        let joined = service.handle(HubRequest(method: "POST", path: "/v1/enroll", bearer: hub.createEnrollToken(now: clock),
-                                               body: FleetAPI.encode(EnrollRequest(hostUUID: "uuid-d", name: "Mini D", appVersion: "9.9.9"))))
-        let joinedReply = FleetAPI.decode(FleetReply<EnrollReply>.self, from: joined.body)?.data
+        func join(_ uuid: String, view: Bool) -> EnrollReply? {
+            let r = service.handle(HubRequest(method: "POST", path: "/v1/enroll", bearer: hub.createEnrollToken(now: clock, view: view),
+                                              body: FleetAPI.encode(EnrollRequest(hostUUID: uuid, name: "Mini " + uuid, appVersion: "9.9.9"))))
+            return FleetAPI.decode(FleetReply<EnrollReply>.self, from: r.body)?.data
+        }
+        // Seeing the fleet is granted by the pairing code, not by joining.
+        let plain = join("uuid-e", view: false)
+        check(plain?.hostToken.isEmpty == false && plain?.readerToken == nil
+              && get(service, "/v1/hosts", token: plain?.hostToken, as: [HostStatus].self).0 == 401, "a Mac that joins with an ordinary code reports but cannot read the fleet")
+        check(service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: plain?.hostToken, body: FleetAPI.encode(IngestBatch(cursor: UploadCursor())))).status == 200, "and its uploads are accepted")
+        let viewer = join("uuid-f", view: true)
+        check(get(service, "/v1/hosts", token: viewer?.readerToken, as: [HostStatus].self).0 == 200, "a code made for viewing gives the Mac its own reader token")
+        let demoted = join("uuid-f", view: false)
+        check(demoted?.readerToken == nil && get(service, "/v1/hosts", token: viewer?.readerToken, as: [HostStatus].self).0 == 401, "joining again with an ordinary code withdraws the view")
+        let granted = hub.grantView(hostUUID: "uuid-e", now: clock)
+        check(granted != nil && get(service, "/v1/hosts", token: granted, as: [HostStatus].self).0 == 200 && hub.grantView(hostUUID: "nobody", now: clock) == nil, "the hub can give an enrolled Mac the view, and only an enrolled one")
+        hub.revoke(hostUUID: "uuid-e"); hub.revoke(hostUUID: "uuid-f")
+
+        let joinedReply = join("uuid-d", view: true)
         check(get(service, "/v1/hosts", token: joinedReply?.readerToken, as: [HostStatus].self).0 == 200, "a Mac that joins can read the fleet with its own reader token")
         _ = service.handle(HubRequest(method: "POST", path: "/v1/ingest", bearer: joinedReply?.hostToken, body: FleetAPI.encode(IngestBatch(cursor: UploadCursor()))))
         check(hub.noteOfflineChanges(now: clock).filter { $0.hostUUID == "uuid-d" }.isEmpty, "a Mac that is reporting raises nothing")
         let silent = hub.noteOfflineChanges(now: clock + 61_000).filter { $0.hostUUID == "uuid-d" }
-        check(silent.map(\.kind) == ["host_offline"] && silent.first?.origin == "hub" && silent.first?.label == "Mini D stopped reporting", "a Mac that goes silent is put on the timeline by the hub")
+        check(silent.map(\.kind) == ["host_offline"] && silent.first?.origin == "hub" && silent.first?.label == "Mini uuid-d stopped reporting", "a Mac that goes silent is put on the timeline by the hub")
         check(hub.noteOfflineChanges(now: clock + 70_000).isEmpty, "and only once")
         var sleepy = IngestBatch(cursor: UploadCursor())
         sleepy.sentAt = clock + 80_000; sleepy.events = [.init(ts: clock + 80_000, kind: "sleep", vmKey: nil, label: "Mac went to sleep", detail: nil)]

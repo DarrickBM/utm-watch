@@ -127,7 +127,18 @@ struct FleetOverview: View {
         .padding(.horizontal, 16).padding(.vertical, 10)
     }
 
-    private var emptyState: some View {
+    @ViewBuilder private var emptyState: some View {
+        if fleet.offersFleetWindow { notInFleet } else {
+            // Only seen if the window was open when the hub withdrew this Mac's view.
+            VStack(spacing: 12) {
+                Image(systemName: "macmini").font(.system(size: 40)).foregroundStyle(.secondary)
+                Text("This Mac reports to a fleet").font(.system(size: 20, weight: .semibold))
+                Text("The fleet is watched from the Mac that hosts the hub.").foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var notInFleet: some View {
         VStack(spacing: 12) {
             Image(systemName: "macmini").font(.system(size: 40)).foregroundStyle(.secondary)
             Text("This Mac is not in a fleet yet").font(.system(size: 20, weight: .semibold))
@@ -414,7 +425,7 @@ struct FleetSettingsSection: View {
 
     @ViewBuilder private var member: some View {
         LabeledContent {
-            Button("Open Fleet") { onOpenFleet() }
+            if fleet.canView { Button("Open Fleet") { onOpenFleet() } }
         } label: {
             Text("Status")
             Text(statusText.text).foregroundStyle(statusText.warn ? Color.orange : Color.secondary)
@@ -427,7 +438,7 @@ struct FleetSettingsSection: View {
             Text("Report this Mac's VMs")
             Text("Off keeps this Mac in the fleet but stops sending. It keeps recording and catches up when switched back on.")
         }
-        alertsToggle
+        if fleet.canView { alertsToggle }
         LabeledContent {
             HStack {
                 TextField("Pairing code", text: $code, prompt: Text("utmw1.…")).labelsHidden().textFieldStyle(.roundedBorder)

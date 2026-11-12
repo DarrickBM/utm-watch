@@ -16,7 +16,7 @@ public final class HubStore {
     private let db: Database
     private let queue = DispatchQueue(label: "utmwatch.hub")
 
-    public static let schemaVersion: Int64 = 2
+    public static let schemaVersion: Int64 = 3
     /// A Mac that has not uploaded for this long is shown as offline.
     public static let offlineAfterMs: Int64 = 60_000
     /// Rows stamped further ahead of the hub's clock than this are dropped: a badly wrong clock must not plant "future" history.
@@ -39,6 +39,12 @@ public final class HubStore {
         if found < 1 { try createV1() }
         // 2: remembers whether a Mac's going offline has been put on the timeline, so it is written once.
         if found < 2 { try db.exec("ALTER TABLE host ADD COLUMN noted_offline INTEGER NOT NULL DEFAULT 0") }
+        // 3: seeing the fleet is no longer given to every Mac that joins. A pairing code says whether its Mac may
+        // view; Macs that joined before lose the view (the hub Mac gives it back to itself).
+        if found < 3 {
+            try db.exec("ALTER TABLE enroll_token ADD COLUMN view INTEGER NOT NULL DEFAULT 0")
+            if found >= 1 { try db.exec("DELETE FROM reader_token WHERE label LIKE 'host:%'") }
+        }
         try db.exec("PRAGMA user_version = \(HubStore.schemaVersion)")
     }
 
@@ -81,14 +87,27 @@ public final class HubStore {
 
     // MARK: Tokens
 
-    /// A single-use code a Mac presents to join the fleet.
-    public func createEnrollToken(now: Int64, ttlMs: Int64 = 24 * 3600 * 1000) -> String {
+    /// A single-use code a Mac presents to join the fleet. `view` lets that Mac see the whole fleet as well as report
+    /// to it; without it the Mac only reports, and learns nothing about the others.
+    public func createEnrollToken(now: Int64, ttlMs: Int64 = 24 * 3600 * 1000, view: Bool = false) -> String {
         let token = FleetToken.make(prefix: "e_")
         queue.sync {
-            _ = try? db.prepare("INSERT INTO enroll_token(hash, created, expires) VALUES(?,?,?)")
-                .bind(1, FleetToken.hash(token)).bind(2, now).bind(3, now + ttlMs).run()
+            _ = try? db.prepare("INSERT INTO enroll_token(hash, created, expires, view) VALUES(?,?,?,?)")
+                .bind(1, FleetToken.hash(token)).bind(2, now).bind(3, now + ttlMs).bind(4, Int64(view ? 1 : 0)).run()
         }
         return token
+    }
+
+    /// Lets an enrolled Mac see the fleet, replacing any view token it had. nil if the Mac is unknown or revoked.
+    public func grantView(hostUUID: String, now: Int64) -> String? {
+        queue.sync {
+            guard let q = try? db.prepare("SELECT 1 FROM host WHERE uuid = ? AND revoked = 0").bind(1, hostUUID), q.step() else { return nil }
+            let token = FleetToken.make(prefix: "r_"), label = "host:" + hostUUID
+            _ = try? db.prepare("DELETE FROM reader_token WHERE label = ?").bind(1, label).run()
+            guard (try? db.prepare("INSERT INTO reader_token(hash, label, created) VALUES(?,?,?)")
+                .bind(1, FleetToken.hash(token)).bind(2, label).bind(3, now).run()) != nil else { return nil }
+            return token
+        }
     }
 
     /// A token that may read the fleet (the fleet view, later a phone).
@@ -121,8 +140,9 @@ public final class HubStore {
         guard !r.hostUUID.isEmpty, r.hostUUID.count <= 64, !r.name.isEmpty, r.name.count <= 200 else { throw HubError.badRequest("host UUID and name are required") }
         return try queue.sync {
             let hash = FleetToken.hash(token)
-            let q = try db.prepare("SELECT 1 FROM enroll_token WHERE hash = ? AND used_by IS NULL AND expires > ?").bind(1, hash).bind(2, now)
+            let q = try db.prepare("SELECT view FROM enroll_token WHERE hash = ? AND used_by IS NULL AND expires > ?").bind(1, hash).bind(2, now)
             guard q.step() else { throw HubError.unauthorized }
+            let mayView = q.int(0) != 0
             q.reset()
             let hostToken = FleetToken.make(prefix: "h_")
             let readerToken = FleetToken.make(prefix: "r_")
@@ -136,16 +156,18 @@ public final class HubStore {
                 let id = try db.prepare("SELECT id FROM host WHERE uuid = ?").bind(1, r.hostUUID)
                 guard id.step() else { throw HubError.badRequest("could not store the host") }
                 try db.prepare("UPDATE enroll_token SET used_by = ? WHERE hash = ?").bind(1, id.int(0)).bind(2, hash).run()
-                // The Mac's own reader token: one per Mac, replaced when it enrols again.
+                // The Mac's own reader token, if its code allows it: one per Mac, replaced or withdrawn when it enrols again.
                 try db.prepare("DELETE FROM reader_token WHERE label = ?").bind(1, readerLabel).run()
-                try db.prepare("INSERT INTO reader_token(hash, label, created) VALUES(?,?,?)").bind(1, FleetToken.hash(readerToken)).bind(2, readerLabel).bind(3, now).run()
+                if mayView {
+                    try db.prepare("INSERT INTO reader_token(hash, label, created) VALUES(?,?,?)").bind(1, FleetToken.hash(readerToken)).bind(2, readerLabel).bind(3, now).run()
+                }
                 id.reset()
                 try db.exec("COMMIT")
             } catch {
                 try? db.exec("ROLLBACK")
                 throw error
             }
-            return EnrollReply(hostToken: hostToken, readerToken: readerToken)
+            return EnrollReply(hostToken: hostToken, readerToken: mayView ? readerToken : nil)
         }
     }
 

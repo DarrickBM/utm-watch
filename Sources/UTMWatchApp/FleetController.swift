@@ -96,6 +96,7 @@ final class FleetController: ObservableObject {
         if FileManager.default.fileExists(atPath: netDirectory), identity?.viaPrivateNetwork == true || hubConfig.authKey != nil { startNet(key: nil) }
         if settings.hostHub { startHub() }
         syncUploader()
+        pollHosts() // also how a Mac learns that it may no longer see the fleet
         settings.$fleetReportingPaused.dropFirst().removeDuplicates().receive(on: RunLoop.main).sink { [weak self] _ in self?.syncUploader() }.store(in: &cancellables)
         let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.everyFiveSeconds() }
         t.tolerance = 1
@@ -314,12 +315,20 @@ final class FleetController: ObservableObject {
                 let uuid = id.flatMap { $0.hostUUID.isEmpty ? nil : $0.hostUUID } ?? UUID().uuidString.lowercased()
                 let name = id.flatMap { $0.name.isEmpty ? nil : $0.name } ?? FleetController.defaultName
                 let version = DispatchQueue.main.sync { self?.version ?? "dev" }
-                let code = store.createEnrollToken(now: Date().msSince1970, ttlMs: 60_000)
+                let code = store.createEnrollToken(now: Date().msSince1970, ttlMs: 60_000, view: true)
                 if case .success(let reply) = local.enroll(code: code, request: EnrollRequest(hostUUID: uuid, name: name, appVersion: version)) {
                     let new = HostIdentity(hostUUID: uuid, name: name, hubURL: local.baseURL, hostToken: reply.hostToken, readerToken: reply.readerToken)
                     try? new.save()
                     id = new
                 }
+            }
+            // The hub Mac is where the fleet is watched from. Its view is renewed here if the hub no longer knows it,
+            // as after an update that withdrew the view from every Mac.
+            if var known = id, !known.hostUUID.isEmpty, !(known.readerToken.map(store.isReader) ?? false),
+               let token = store.grantView(hostUUID: known.hostUUID, now: Date().msSince1970) {
+                known.readerToken = token
+                try? known.save()
+                id = known
             }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -466,7 +475,7 @@ final class FleetController: ObservableObject {
                 try? proxy.write(toFile: HostIdentity.proxyNotePath, atomically: true, encoding: .utf8)
                 FileLog.shared.log("fleet: joined the private network as \(address)")
                 syncUploader()
-                if viewActive { pollHosts() }
+                pollHosts()
             case "needs-login":
                 net = .needsKey
                 process.terminate()
@@ -489,6 +498,8 @@ final class FleetController: ObservableObject {
     // MARK: The fleet view
 
     var canView: Bool { identity?.readerToken?.isEmpty == false }
+    /// Whether to offer the fleet window at all: not on a Mac that only reports to a fleet.
+    var offersFleetWindow: Bool { identity == nil || identity?.hostToken.isEmpty == true || canView }
 
     func select(_ uuid: String?) {
         selected = uuid
@@ -529,6 +540,15 @@ final class FleetController: ObservableObject {
                 case .failure(.unreachable):
                     self.hostsError = "The hub did not answer. Showing what it last said."
                 case .failure(.rejected(let status, let message)):
+                    // The hub has withdrawn this Mac's view of the fleet. It still reports; it just no longer looks.
+                    if status == 401, !self.settings.hostHub, var id = self.identity, id.readerToken == token {
+                        id.readerToken = nil
+                        try? id.save()
+                        self.identity = id
+                        self.hosts = []; self.loadedOnce = false; self.select(nil)
+                        FileLog.shared.log("fleet: the hub no longer lets this Mac see the fleet")
+                        return
+                    }
                     self.hostsError = status == 401 ? "The hub no longer accepts this Mac. Enter a new pairing code in Settings." : message
                 }
             }

@@ -5,7 +5,7 @@ and how it is built. The single-Mac app is described in `DESIGN-menu-bar-app.md`
 
 ## 1. What a fleet is
 
-Several Macs running UTM Watch report to one **hub**. Any Mac in the fleet can open the **fleet window** and see every
+Several Macs running UTM Watch report to one **hub**. The Mac that hosts the hub can open the **fleet window** and see every
 Mac's VMs. It is the same app everywhere: a Mac is in a fleet only once it has joined one or hosts the hub.
 
 - Monitoring only. The hub has a reserved command channel; nothing uses it yet.
@@ -15,7 +15,7 @@ Mac's VMs. It is the same app everywhere: a Mac is in a fleet only once it has j
 ## 2. Parts
 
 ```
-Mac (member)                      Hub                               Any Mac (fleet window)
+Mac (member)                      Hub                               Hub Mac (fleet window)
 sampler -> local SQLite           utmwatch-hub + hub.sqlite         FleetController polls /v1/hosts
 Uploader -> POST /v1/ingest ----> ingest, rollups, offline events   drill-in: DetailView fed by the hub
 ```
@@ -36,7 +36,7 @@ The app bundle carries `utmwatch-hub` and `utmwatch-net` beside `utmwatch-mcp` (
 The hub Mac makes a **pairing code**: one string, `utmw1.` followed by the hub's address, a single-use enrolment token
 (15 minutes) and, when the fleet spans networks, the network key. The other Mac pastes it into Settings › Fleet.
 
-- The hub answers with the Mac's own upload token and its own reader token, saved in `fleet.json` (mode 0600) in the
+- The hub answers with the Mac's own upload token, saved in `fleet.json` (mode 0600) in the
   app's data folder. The hub keeps only hashes.
 - Joining again keeps the Mac's UUID, so its history stays; the old tokens stop working.
 - Revoking a Mac on the hub ends both its uploads and its view of the fleet.
@@ -100,7 +100,10 @@ Recommended key: reusable, tagged, pre-approved, not ephemeral. Tagged nodes do 
   meant for a trusted LAN or the private network, never the open internet.
 - The app allows plain HTTP generally (`NSAllowsArbitraryLoads`), because a hub's address is whatever the user's
   network gives it. The update check still requires https itself.
-- Every enrolled Mac can read the whole fleet.
+- Only the hub Mac sees the fleet. A Mac that joins with a pairing code reports and learns nothing about the others:
+  it has no "Open Fleet", no alerts about other Macs, and no fleet tools in MCP, and the hub refuses its token for
+  reading. (Whoever uses that Mac can still see that it reports, and to which address.) A view can be given to
+  another Mac from the command line: `utmwatch-hub token create --enroll --view` makes a code whose Mac may view.
 - Ad-hoc signed builds make macOS ask for permissions again after each update, on every Mac.
 - Testing aids: `UTMWATCH_DATA_DIR` moves the app's files; `UTMWATCH_NO_UTM=1` keeps a trial copy away from UTM;
   `utmwatch fleet sim` imitates Macs; `--snapshot-fleet <png>` pictures the fleet window.

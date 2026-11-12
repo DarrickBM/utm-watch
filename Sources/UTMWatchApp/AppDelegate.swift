@@ -73,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.onOpenDetails = { [weak self] in self?.showDetails() }
         statusItem.onOpenSettings = { [weak self] in self?.showSettings() }
         statusItem.onOpenFleet = { [weak self] in self?.showFleet() }
+        statusItem.offersFleet = { [weak self] in self?.fleet.offersFleetWindow ?? true }
         model.attachStore()
         // Fleet: does nothing unless this Mac has joined a fleet or hosts a hub.
         fleet.start()
@@ -230,6 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func showFleet() {
+        guard fleet.offersFleetWindow else { return } // a Mac that only reports has no fleet window
         if fleetWindow == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)

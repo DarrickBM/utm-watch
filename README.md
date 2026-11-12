@@ -168,7 +168,7 @@ On first launch macOS asks for three permissions: access to data from other apps
 ## Fleet: several Macs, one view
 
 UTM Watch on one Mac needs nothing below. With several Macs, one of them hosts a **hub** and the others report to it;
-any of them can then open **Open Fleet** from the menu bar item and see every Mac's VMs, and click a Mac for its history.
+the hub Mac can then open **Open Fleet** from the menu bar item and see every Mac's VMs, and click a Mac for its history. The other Macs only report: they cannot see the fleet.
 
 1. On the Mac that will host the hub: Settings › Fleet › **Host the hub on this Mac**, then **New pairing code**.
 2. On each other Mac: Settings › Fleet, paste the code, **Join**. A code adds one Mac and works once, for 15 minutes.
