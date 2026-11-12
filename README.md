@@ -9,7 +9,7 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 - **Every VM by name**, with CPU, memory, network, disk and ping, live in the menu bar.
 - **A quick look without opening a window**: hover the menu bar item for every VM and the Mac at a glance. Click it for the full window.
 
-  <p align="center"><img src="docs/images/menu-bar-hover.png" width="392" alt="The menu bar item with its hover brief below"></p>
+  <p align="center"><img src="docs/images/menu-bar-quick-look.png" width="428" alt="The menu bar item with its hover brief below"></p>
 
 - **Recorded history** you can scrub back through, to see exactly what was happening at a past moment.
 - **The whole connection path**: ping to each VM, to your router and to the internet, plus Wi-Fi or Ethernet link quality, so you can tell a slow VM from a slow network.
@@ -109,6 +109,7 @@ swift run selftest
 |---|---|---|
 | CPU | Process CPU time (user + system) delta ÷ real elapsed time, in cores. 1.0 = one core fully busy. | `proc_pid_rusage` |
 | Memory | Physical footprint of the VM process, **including compressed pages**; matches Activity Monitor's Memory column. It is shown against the VM's configured RAM, but it covers the whole VM process, including memory the Mac uses on the VM's behalf, so it can read higher than the configured RAM. Once a guest has touched all its memory the footprint barely moves, so the detail window's Memory track also plots how much of the footprint is **in RAM right now** (solid) against the footprint (dashed). | `proc_pid_rusage`, `config.plist` |
+| Disk | Space in use inside the VM against the size its disk was created with, read every 10 seconds from the disk image file, read-only and without asking the guest. For a macOS guest it is the APFS container's own count of blocks in use, so it matches what the guest reports. For a disk that cannot be read this way it is the room the image takes on the Mac. An event is recorded when a disk passes 90%. | the VM's disk image (`Data/*.img`): GPT, then the APFS space manager |
 | ↓ Down / ↑ Up | Bytes per second on the VM's `vmenetN` interface, from the guest's point of view. | per-interface MIB (64-bit counters) |
 | Total ↓/↑ | Bytes since the interface was created (i.e. since the VM booted). | same |
 | Allocatable | total RAM − memory used by macOS and your apps (measured, not a fixed reserve) − configured RAM of all running VMs. VMs can grow to their limit, so limits are counted, not current footprints. | `host_statistics64`, `config.plist` |
