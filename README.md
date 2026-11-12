@@ -7,6 +7,10 @@ See what each of your [UTM](https://mac.getutm.app) virtual machines is really d
 UTM shows whether a VM is on or off. Activity Monitor shows two processes with the same name. Neither tells you which VM is eating the CPU, how close you are to running out of memory, or whether the lag your remote user felt came from the VM, the Mac, or the Wi-Fi. UTM Watch does.
 
 - **Every VM by name**, with CPU, memory, network, disk and ping, live in the menu bar.
+- **A quick look without opening a window**: hover the menu bar item for every VM and the Mac at a glance. Click it for the full window.
+
+  <img src="docs/images/menu-bar-brief.png" width="380" alt="The menu bar item with its hover brief below">
+
 - **Recorded history** you can scrub back through, to see exactly what was happening at a past moment.
 - **The whole connection path**: ping to each VM, to your router and to the internet, plus Wi-Fi or Ethernet link quality, so you can tell a slow VM from a slow network.
 - **Fleets**: several Macs report to one hub, and one window shows every Mac and its VMs. Free, with no accounts.
@@ -14,10 +18,6 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
   ![The Fleet window on the hub Mac: every Mac with its VMs](docs/images/fleet-view.png)
 
 - **AI diagnosis** through a read-only MCP server: ask an agent such as Claude why a VM was slow, on this Mac or any Mac in the fleet, and it reads the history and tells you.
-
-<p>
-  <img src="docs/images/hover-brief.png" width="380" alt="Hover brief under the menu bar item">
-</p>
 
 UTM Watch is an independent project. It is not affiliated with or endorsed by the UTM project. Licensed under the MIT License; see `LICENSE`.
 
