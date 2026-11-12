@@ -9,7 +9,7 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 - **Every VM by name**, with CPU, memory, network, disk and ping, live in the menu bar.
 - **A quick look without opening a window**: hover the menu bar item for every VM and the Mac at a glance. Click it for the full window.
 
-  <img src="docs/images/menu-bar-brief.png" width="380" alt="The menu bar item with its hover brief below">
+  <p align="center"><img src="docs/images/menu-bar-brief.png" width="392" alt="The menu bar item with its hover brief below"></p>
 
 - **Recorded history** you can scrub back through, to see exactly what was happening at a past moment.
 - **The whole connection path**: ping to each VM, to your router and to the internet, plus Wi-Fi or Ethernet link quality, so you can tell a slow VM from a slow network.
