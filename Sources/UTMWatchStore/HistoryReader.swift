@@ -58,12 +58,12 @@ enum HistoryReader {
         let sql = useRollup ? """
             SELECT vm_id, (minute * 60000 + 30000 - ?1) * ?3 / ?4 AS b, CAST(avg(minute * 60000 + 30000) AS INTEGER),
                    avg(cpu_avg), max(cpu_max), avg(mem_avg), avg(down_avg), max(down_max), avg(up_avg), max(up_max), max(down_total), max(up_total),
-                   avg(disk_read), avg(disk_write), avg(res_avg)
+                   avg(disk_read), avg(disk_write), avg(res_avg), avg(disk_used), avg(disk_size)
             FROM sample_1m WHERE minute >= ?1 / 60000 AND minute <= ?2 / 60000\(s.sampleAnd) GROUP BY vm_id, b ORDER BY vm_id, b
             """ : """
             SELECT vm_id, (ts - ?1) * ?3 / ?4 AS b, CAST(avg(ts) AS INTEGER),
                    avg(cpu), max(cpu), avg(mem), avg(down), max(down), avg(up), max(up), max(down_total), max(up_total),
-                   avg(disk_read), avg(disk_write), avg(res)
+                   avg(disk_read), avg(disk_write), avg(res), avg(disk_used), avg(disk_size)
             FROM sample WHERE ts >= ?1 AND ts <= ?2\(s.sampleAnd) GROUP BY vm_id, b ORDER BY vm_id, b
             """
         let q = try db.prepare(sql).bind(1, from).bind(2, to).bind(3, buckets).bind(4, span)
@@ -72,7 +72,8 @@ enum HistoryReader {
             h.series[key, default: []].append(VMPoint(
                 t: q.int(2), cpu: q.doubleOrNil(3), cpuMax: q.doubleOrNil(4), mem: q.doubleOrNil(5),
                 down: q.doubleOrNil(6), downMax: q.doubleOrNil(7), up: q.doubleOrNil(8), upMax: q.doubleOrNil(9),
-                downTotal: q.doubleOrNil(10), upTotal: q.doubleOrNil(11), diskRead: q.doubleOrNil(12), diskWrite: q.doubleOrNil(13), res: q.doubleOrNil(14)))
+                downTotal: q.doubleOrNil(10), upTotal: q.doubleOrNil(11), diskRead: q.doubleOrNil(12), diskWrite: q.doubleOrNil(13), res: q.doubleOrNil(14),
+                diskUsed: q.doubleOrNil(15), diskSize: q.doubleOrNil(16)))
         }
         h.vms = order.filter { h.series[$0] != nil }.compactMap { infos[$0] }
 
@@ -128,7 +129,7 @@ enum HistoryReader {
         try db.prepare("""
             INSERT OR REPLACE INTO sample_1m
             SELECT vm_id, ts / 60000, avg(cpu), max(cpu), avg(mem), avg(down), max(down), avg(up), max(up), max(down_total), max(up_total),
-                   avg(disk_read), avg(disk_write), avg(res)
+                   avg(disk_read), avg(disk_write), avg(res), avg(disk_used), avg(disk_size)
             FROM sample WHERE ts >= ? AND ts < ?\(s.sampleAnd) GROUP BY vm_id, ts / 60000
             """).bind(1, fromMinute * 60000).bind(2, toMinute * 60000).run()
         try db.prepare("""

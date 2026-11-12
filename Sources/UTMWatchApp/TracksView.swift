@@ -2,7 +2,7 @@ import SwiftUI
 import UTMWatchCore
 import UTMWatchStore
 
-/// Stacked trend tracks on one shared time axis: events, CPU, memory, host swap, network down and up, and ping.
+/// Stacked trend tracks on one shared time axis: events, CPU, memory, host swap, disk, network down and up, and ping.
 /// Each track carries its own readings beside the plot, and periods of weak Wi-Fi and
 /// missing data are shaded through every track so cause and effect line up by eye.
 struct TracksView: View {
@@ -36,8 +36,8 @@ struct TracksView: View {
     /// Axis labels sit to the right of the plot so they never cover data.
     private let gutter: CGFloat = 72
     private let axisHeight: CGFloat = 20
-    /// Relative heights: CPU, memory, host swap, network down, network up, responsiveness, network path.
-    private static let weights: [CGFloat] = [1.3, 1, 0.75, 1, 1, 1.1, 1]
+    /// Relative heights: CPU, memory, host swap, disk, network down, network up, responsiveness, network path.
+    private static let weights: [CGFloat] = [1.3, 1, 0.75, 1, 1, 1, 1.1, 1]
 
     private struct Layout {
         var unit: CGFloat
@@ -74,6 +74,8 @@ struct TracksView: View {
         var warning: (VMPoint, VMConfig?, String) -> String? = { _, _, _ in nil }
         /// A second, dashed line per VM drawn behind the main one.
         var secondary: ((VMPoint) -> Double?)? = nil
+        /// A dashed alert line at this value, labelled in the gutter in place of the top axis label.
+        var threshold: (value: Double, label: String)? = nil
         /// What the track shows, in plain words; appears when hovering its label.
         var explanation: String = ""
     }
@@ -124,6 +126,18 @@ struct TracksView: View {
                  },
                  secondary: { $0.mem },
                  explanation: "Solid line: how much of the VM's memory is in this Mac's RAM right now. Dashed line: how much the VM holds in total.\n\nHow it is measured: \"held\" is the physical footprint of the VM's process, including pages macOS has compressed or moved to swap; it matches Activity Monitor's Memory column. \"In RAM\" is the process's resident size, which leaves those pages out. Once a guest has touched all its memory the dashed line is usually flat. The gap between the two lines is memory the VM must wait for when it needs it again.\n\nWhy held can be more than the VM's memory size: held covers everything macOS charges to the VM's process, not only the guest's own memory. Memory the Mac uses on the VM's behalf, such as for its display, is counted too, so held can read higher than the memory size set in UTM."),
+            Spec(title: "Disk", unit: "used / volume size", value: { $0.diskFraction.map { $0 * 100 } }, peak: { $0.diskFraction.map { $0 * 100 } }, yMax: 100,
+                 label: { "\(Int($0))%" },
+                 text: { p, _ in
+                     guard let used = p.diskUsed, let size = p.diskSize else { return "—" }
+                     return Format.memoryPair(UInt64(max(0, used)), UInt64(max(0, size)))
+                 },
+                 warning: { p, _, name in
+                     guard let fraction = p.diskFraction, fraction >= 0.9, let used = p.diskUsed, let size = p.diskSize else { return nil }
+                     return "\(name)'s disk is \(Int((fraction * 100).rounded()))% full (\(Format.memoryPair(UInt64(max(0, used)), UInt64(max(0, size))))). A guest that runs out of disk space stops saving work and can fail to start."
+                 },
+                 threshold: (90, "90%"),
+                 explanation: "How full each VM's disk is: the space in use inside the VM against how much its main volume holds. The line is the share in use, and the dashed line is 90%.\n\nHow it is measured: every 10 seconds UTM Watch reads the VM's disk image file, without changing it and without asking the VM. The guest's filesystem keeps its own count of the space in use, and that count is what is shown: APFS for macOS guests, ext4, Btrfs and XFS for Linux guests (also inside LVM), and NTFS for Windows guests. While the VM runs the figure can trail the guest's by a few seconds of writing. The size is the main volume's, which is a little less than the disk's nominal size because boot and recovery partitions take the rest. For a disk that cannot be read this way (an encrypted one, say), the figure is the room the image file takes on this Mac against the disk's nominal size. Sizes use the same units as UTM. UTM Watch records an event when a disk goes above 90%."),
             Spec(title: "Network ↓", unit: "into the VM", value: { $0.down }, peak: { $0.downMax }, yMax: downMax,
                  label: { Format.rate($0, units: u) }, text: { p, _ in Format.rate(p.down, units: u) },
                  explanation: "Data arriving in each VM per second.\n\nHow it is measured: each VM has its own virtual network interface on this Mac (vmenetN), found by looking up the VM's MAC address in the bridge's address table. The interface's byte counters are read every sample and the change is divided by the time between samples. Directions are from the VM's point of view: down is into the VM. Units are decimal: 1 MB/s is 1,000,000 bytes per second. VMs on bridged networking show nothing here."),
@@ -150,7 +164,7 @@ struct TracksView: View {
                     Text("Events").font(.system(size: 13, weight: .semibold))
                         .contentShape(Rectangle())
                         .onHover { inside in
-                            explain(-1, key: "title -1", "Things UTM Watch noticed in this time frame. Click a marker to pin that moment.\n\nWhat is recorded: a VM starting or stopping; macOS changing its memory pressure level; swap going above 80%; a VM held at 90% of its cores or more for a minute; the Wi-Fi signal weak for two readings in a row, or recovering; the network link going down or changing; and the Mac going to sleep or waking. Warnings are orange triangles, everything else is a circle.", inside)
+                            explain(-1, key: "title -1", "Things UTM Watch noticed in this time frame. Click a marker to pin that moment.\n\nWhat is recorded: a VM starting or stopping; macOS changing its memory pressure level; swap going above 80%; a VM held at 90% of its cores or more for a minute; a VM's disk going above 90% full; the Wi-Fi signal weak for two readings in a row, or recovering; the network link going down or changing; and the Mac going to sleep or waking. Warnings are orange triangles, everything else is a circle.", inside)
                         }
                     Text(history.events.isEmpty ? "none in this range" : "\(history.events.count) in this range")
                         .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
@@ -163,10 +177,11 @@ struct TracksView: View {
             swapTrack(height: height(2))
             vmTrack(3, s[2], height: height(3))
             vmTrack(4, s[3], height: height(4))
-            probeTrack(5, title: "Responsiveness", unit: "VM ping", height: height(5),
+            vmTrack(5, s[4], height: height(5))
+            probeTrack(6, title: "Responsiveness", unit: "VM ping", height: height(6),
                        explanation: "How long each VM takes to answer a ping from this Mac.\n\nHow it is measured: every 10 seconds UTM Watch sends one ping (an ICMP echo) to the VM's address on the Mac's internal network and times the reply, waiting up to 1 second. The address comes from the Mac's ARP table, matched by the VM's MAC address. The reply never leaves the Mac, so it normally takes under 1 ms; a higher value means the VM itself was slow to react. A red tick is a ping with no reply. Over long time frames each point is the average and the faint line is the worst.",
                        series: history.vms.map { ProbeSeries(key: $0.key, name: $0.name, color: color($0.key), points: history.probes[ProbeTarget.vm($0.key)] ?? []) })
-            probeTrack(6, title: "Network path", unit: "from the Mac", height: height(6),
+            probeTrack(7, title: "Network path", unit: "from the Mac", height: height(7),
                        explanation: "How long it takes to reach your router and the internet from this Mac. It separates network trouble from VM trouble: when a remote session lags while Responsiveness stays flat, the cause is on this path.\n\nHow it is measured: every 10 seconds, one ping to the router and one to the internet, each waiting up to 1 second. A red tick is a ping with no reply. Hover Router or Internet to see what each one covers.",
                        series: [
                 ProbeSeries(name: "Router", color: SeriesPalette.color(index: 2, scheme: scheme), points: history.probes[ProbeTarget.gateway] ?? [],
@@ -300,7 +315,13 @@ struct TracksView: View {
             label(index: index, title: spec.title, unit: spec.unit, items: vmItems(spec), height: height, explanation: spec.explanation)
             Canvas { ctx, size in
                 func y(_ v: Double) -> CGFloat { size.height - CGFloat(min(1.08, v / spec.yMax)) * size.height * 0.92 }
-                let w = drawFrame(&ctx, size: size, y: y, labels: [(spec.yMax, spec.label(spec.yMax)), (spec.yMax / 2, spec.label(spec.yMax / 2))])
+                let half = (spec.yMax / 2, spec.label(spec.yMax / 2))
+                let w = drawFrame(&ctx, size: size, y: y, labels: spec.threshold == nil ? [(spec.yMax, spec.label(spec.yMax)), half] : [half])
+                if let t = spec.threshold {
+                    var limit = Path(); limit.move(to: CGPoint(x: 0, y: y(t.value))); limit.addLine(to: CGPoint(x: w, y: y(t.value)))
+                    ctx.stroke(limit, with: .color(Color.primary.opacity(0.5)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    ctx.draw(Text(t.label).font(.system(size: 11)), at: CGPoint(x: w + 8, y: y(t.value)), anchor: .leading)
+                }
 
                 // A line is broken wherever samples are missing (Mac asleep, app not running, VM stopped).
                 let gap = max(history.bucketMs * 3, 10_000)

@@ -12,6 +12,8 @@ public struct UTMBundle: Equatable {
     public var macAddresses: [String]
     public var networkModes: [String]
     public var isMacOS: Bool
+    /// File names of the VM's writable disk images, inside the bundle's Data folder.
+    public var diskImages: [String] = []
 
     /// Stable key for a VM. The bundle path is known as soon as the process is seen, before config.plist
     /// has been read, so it never changes mid-run the way a UUID-once-loaded key would.
@@ -78,7 +80,7 @@ public enum UTMBundles {
         return UTMBundle(url: url, uuid: info?["UUID"] as? String, name: name, backend: backend,
                          cpuCount: cpu.flatMap { $0 > 0 ? $0 : nil },
                          memoryBytes: memMiB.flatMap { $0 > 0 ? $0 * 1024 * 1024 : nil },
-                         macAddresses: macs, networkModes: modes, isMacOS: isMac)
+                         macAddresses: macs, networkModes: modes, isMacOS: isMac, diskImages: DiskImages.imageNames(plist: plist))
     }
 }
 

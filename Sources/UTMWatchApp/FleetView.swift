@@ -28,7 +28,7 @@ struct FleetOverview: View {
     @State private var attentionOnly = false
 
     private enum Col {
-        static let state: CGFloat = 150, cpu: CGFloat = 190, memory: CGFloat = 250, network: CGFloat = 210, tail: CGFloat = 90
+        static let state: CGFloat = 130, cpu: CGFloat = 170, memory: CGFloat = 230, disk: CGFloat = 170, network: CGFloat = 190, tail: CGFloat = 80
     }
 
     private var newestVersion: String? {
@@ -103,7 +103,7 @@ struct FleetOverview: View {
             Divider()
             footer
         }
-        .frame(minWidth: 1180, minHeight: 720)
+        .frame(minWidth: 1340, minHeight: 720)
     }
 
     // MARK: Chrome
@@ -176,6 +176,7 @@ struct FleetOverview: View {
             Text("State").frame(width: Col.state, alignment: .leading)
             Text("CPU").frame(width: Col.cpu, alignment: .leading)
             Text("Memory").frame(width: Col.memory, alignment: .leading)
+            Text("Disk").frame(width: Col.disk, alignment: .leading)
             Text("Network").frame(width: Col.network, alignment: .leading)
             Text("").frame(width: Col.tail)
         }
@@ -218,10 +219,11 @@ struct FleetOverview: View {
                             }
                         }
                         .frame(width: Col.memory, alignment: .leading)
+                        Text("").frame(width: Col.disk)
                         Text(linkText(host.link)).foregroundStyle(Explain.link(host.link) == nil ? Color.primary : Color.orange)
                             .frame(width: Col.network, alignment: .leading)
                     } else {
-                        Text("").frame(width: Col.cpu + Col.memory + Col.network)
+                        Text("").frame(width: Col.cpu + Col.memory + Col.disk + Col.network)
                     }
                 }
                 .monospacedDigit().lineLimit(1)
@@ -260,10 +262,14 @@ struct FleetOverview: View {
                 FleetMeter(text: memoryText(row), fraction: fraction((row.residentBytes ?? row.memoryBytes).map(Double.init), limit),
                            back: row.residentBytes == nil ? nil : fraction(row.memoryBytes.map(Double.init), limit), warning: nil)
                     .frame(width: Col.memory - 20, alignment: .leading).padding(.trailing, 20)
+                diskCell(row)
                 Text("↓ \(Format.rate(row.downRate, units: settings.rateUnits))   ↑ \(Format.rate(row.upRate, units: settings.rateUnits))")
                     .monospacedDigit().lineLimit(1).frame(width: Col.network, alignment: .leading)
             } else {
-                Text("").frame(width: Col.cpu + Col.memory + Col.network)
+                // A stopped VM's disk is as full as it was: the image is still there to read.
+                Text("").frame(width: Col.cpu + Col.memory)
+                diskCell(row)
+                Text("").frame(width: Col.network)
             }
             Text("").frame(width: Col.tail)
         }
@@ -271,6 +277,16 @@ struct FleetOverview: View {
         .opacity(running ? 1 : 0.6)
         .padding(.horizontal, 20).frame(height: 30)
         .overlay(alignment: .bottom) { Divider().padding(.leading, 46) }
+    }
+
+    /// How full the VM's disk is; empty for a VM whose disk cannot be read or whose Mac runs a version that does not report it.
+    @ViewBuilder private func diskCell(_ row: VMRow) -> some View {
+        if let used = row.diskUsedBytes, let size = row.diskSizeBytes {
+            FleetMeter(text: Format.memoryPair(used, size), fraction: row.diskFraction, warning: Explain.disk(row))
+                .frame(width: Col.disk - 20, alignment: .leading).padding(.trailing, 20)
+        } else {
+            Text("").frame(width: Col.disk)
+        }
     }
 
     /// A Mac that is not reporting: what it had, in one line, rather than rows of stale numbers.

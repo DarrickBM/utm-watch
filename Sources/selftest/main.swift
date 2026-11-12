@@ -232,6 +232,7 @@ do {
                       cpuCores: 1.0, cpuAllocated: 6, memoryBytes: 7 * gb, memoryAllocatedBytes: 8 * gb, downRate: 1000,
                       upRate: (20..<22).contains(minute(i)) ? 400_000 : 500, downTotal: 1, upTotal: 1)
         a.diskWriteRate = 2_000_000
+        a.diskUsedBytes = (i < 600 ? 50 : 56) * gb; a.diskSizeBytes = 60 * gb
         var host = HostSummary(totalMemory: 48 * gb, hostUsed: 40 * gb, hostOtherUsed: (pressured ? 34 : 24) * gb, freeNow: 8 * gb, allocatable: 8 * gb,
                                pressure: pressured ? .warning : .normal, swapUsed: (pressured ? 3600 : 1000) * (gb / 1000), swapTotal: 4 * gb,
                                physicalCores: 14, allocatedCores: 6, macOSRunning: 1)
@@ -256,6 +257,13 @@ do {
         check(h.link.count > 100 && h.link.contains { ($0.rssi ?? 0) <= -79 }, "link samples stored with signal strength")
         check(h.series["A"]?.first?.diskWrite == 2_000_000 && h.host.first?.cpu == 3.5, "disk rate and host CPU stored")
         check(h.events.first { $0.kind == "pressure_warning" }?.detail?.contains("oMLX") == true, "event detail stored")
+        check(h.series["A"]?.first?.diskUsed == Double(50 * gb) && h.series["A"]?.last?.diskFraction.map { abs($0 - 56.0 / 60) < 0.001 } == true, "disk usage stored, raw and rolled up")
+        var diskDet = EventDetector()
+        let diskEvents = snaps.flatMap { diskDet.ingest($0) }.filter { $0.kind.hasPrefix("disk_") }
+        check(diskEvents.map(\.kind) == ["disk_high"] && diskEvents.first?.label == "macOS 26 disk 90% full" && diskEvents.first?.isWarning == true, "one warning when a disk passes 90%")
+        var diskSeeded = EventDetector()
+        diskSeeded.seed(diskHigh: ["A"])
+        check(!diskSeeded.ingest(snaps[snaps.count - 1]).contains { $0.kind == "disk_high" }, "a restart while a disk is still nearly full does not log it again")
 
         let found = Diagnostics.incidents(h)
         let kinds = Set(found.map(\.kind))
@@ -382,6 +390,7 @@ do {
                           cpuCores: cpu + Double(i % 5) * 0.1, cpuAllocated: 6, memoryBytes: 7 * gb, memoryAllocatedBytes: 8 * gb,
                           downRate: 1000, upRate: 500, downTotal: UInt64(i) * 2000, upTotal: UInt64(i) * 1000)]
         rows[0].residentBytes = 3 * gb
+        rows[0].diskUsedBytes = 50 * gb + UInt64(i) * 1_000_000; rows[0].diskSizeBytes = 60 * gb
         if bRunning {
             rows.append(VMRow(id: "/Users/me/B.utm", name: "Build box", backend: .qemu, status: .running, pid: 11, identified: true,
                               cpuCores: 0.5, cpuAllocated: 4, memoryBytes: 2 * gb, memoryAllocatedBytes: i < 100 ? 4 * gb : 8 * gb))
@@ -452,6 +461,8 @@ do {
         let hubRaw = hub.load(hostUUID: "uuid-a", from: t0, to: t1, maxPoints: nil)
         check(localRaw.series["/Users/me/A.utm"]?.count == 300 && localRaw.probes.count == 6, "the local history under test is not empty")
         check(hubRaw == localRaw, "the hub returns a Mac's raw history exactly as that Mac reads it")
+        check(hubRaw?.series["/Users/me/A.utm"]?.last?.diskUsed == Double(50 * gb + 299_000_000) && hubRaw?.series["/Users/me/B.utm"]?.last?.diskUsed == nil,
+              "disk usage reaches the hub for the VMs that have it")
         check(hub.load(hostUUID: "uuid-a", from: t0, to: t1, maxPoints: 50) == macA.load(from: t0, to: t1, maxPoints: 50), "bucketed history matches too")
         let localLong = macA.load(from: t0 - 3 * 3600_000, to: t1, maxPoints: 600)
         check(localLong.series["/Users/me/A.utm"]?.count == 9, "the local store rolled up nine completed minutes")

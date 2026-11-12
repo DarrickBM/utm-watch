@@ -59,7 +59,7 @@ struct DetailView: View {
                                onPin: { detail.pin = Date(ms: $0) },
                                availableHeight: geo.size.height, focus: detail.focus, hostName: remote?.name ?? "This Mac")
                 }
-                .frame(minHeight: 380)
+                .frame(minHeight: 460) // eight tracks: below this the per-VM readings no longer fit beside them
             }
             .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 10)
             // White content between the grey toolbar and footer, as in the design.
@@ -67,7 +67,7 @@ struct DetailView: View {
             Divider()
             footer
         }
-        .frame(minWidth: 1180, minHeight: 720)
+        .frame(minWidth: 1180, minHeight: 800)
         .onChange(of: detail.pin) { _, _ in promptCopied = false }
     }
 

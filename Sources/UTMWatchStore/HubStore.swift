@@ -16,7 +16,7 @@ public final class HubStore {
     private let db: Database
     private let queue = DispatchQueue(label: "utmwatch.hub")
 
-    public static let schemaVersion: Int64 = 3
+    public static let schemaVersion: Int64 = 4
     /// A Mac that has not uploaded for this long is shown as offline.
     public static let offlineAfterMs: Int64 = 60_000
     /// Rows stamped further ahead of the hub's clock than this are dropped: a badly wrong clock must not plant "future" history.
@@ -44,6 +44,13 @@ public final class HubStore {
         if found < 3 {
             try db.exec("ALTER TABLE enroll_token ADD COLUMN view INTEGER NOT NULL DEFAULT 0")
             if found >= 1 { try db.exec("DELETE FROM reader_token WHERE label LIKE 'host:%'") }
+        }
+        // 4: how full each VM's disks are.
+        if found < 4 {
+            for table in ["sample", "sample_1m"] {
+                try db.exec("ALTER TABLE \(table) ADD COLUMN disk_used REAL")
+                try db.exec("ALTER TABLE \(table) ADD COLUMN disk_size REAL")
+            }
         }
         try db.exec("PRAGMA user_version = \(HubStore.schemaVersion)")
     }
@@ -212,12 +219,17 @@ public final class HubStore {
                 }
 
                 var sampleMin = Int64.max, sampleMax = Int64.min
-                let insSample = try db.prepare("INSERT OR REPLACE INTO sample VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+                let insSample = try db.prepare("INSERT OR REPLACE INTO sample VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)")
                 for r in b.samples where r.count == 11 {
                     guard let i = HubStore.int(r[0]).map(Int.init), vmIDs.indices.contains(i), let ts = HubStore.int(r[1]), ts <= limit else { continue }
                     insSample.bind(1, vmIDs[i]).bind(2, ts)
                     for col in 2..<11 { insSample.bind(Int32(col + 1), r[col]) }
                     insSample.run()
+                }
+                let setDisk = try db.prepare("UPDATE sample SET disk_used = ?3, disk_size = ?4 WHERE vm_id = ?1 AND ts = ?2")
+                for r in b.disks ?? [] where r.count == 4 {
+                    guard let i = HubStore.int(r[0]).map(Int.init), vmIDs.indices.contains(i), let ts = HubStore.int(r[1]), ts <= limit else { continue }
+                    setDisk.bind(1, vmIDs[i]).bind(2, ts).bind(3, r[2]).bind(4, r[3]).run()
                 }
                 let insHost = try db.prepare("INSERT OR REPLACE INTO host_sample VALUES(?,?,?,?,?,?,?,?,?,?)")
                 for r in b.host where r.count == 9 {

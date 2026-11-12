@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 # OUT_DIR lets a release build go somewhere other than the copy you run day to day.
 APP="${OUT_DIR:-build}/UTMWatch.app"
 BUNDLE_ID="com.darrick.utmwatch"
-VERSION="${VERSION:-0.6.0}"
+VERSION="${VERSION:-0.7.0}"
 # The build number tells apart builds that share a version, such as successive betas: the number of commits.
 BUILD="${BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 # BETA=6 marks the build as beta 6 of VERSION. The updater reads it to tell betas of one version apart, and a beta

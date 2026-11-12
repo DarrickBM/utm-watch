@@ -241,6 +241,9 @@ func momentJSON(_ h: History, at t: Int64, _ src: Source) -> [String: Any] {
             if let v = p.up { d["uploadKBps"] = r3(v / 1000) }
             if let v = p.diskRead { d["diskReadKBps"] = r3(v / 1000) }
             if let v = p.diskWrite { d["diskWriteKBps"] = r3(v / 1000) }
+            if let used = p.diskUsed, let size = p.diskSize, size > 0 {
+                d["diskUsedGB"] = r3(used / gib); d["diskSizeGB"] = r3(size / gib); d["diskUsedPercent"] = r3(used / size * 100)
+            }
         } else {
             d["state"] = "not running, or no sample near this time"
         }
@@ -304,9 +307,9 @@ let tools: [[String: Any]] = [
      "description": "Every recorded value at one moment (nearest sample within 30 seconds), like pinning that moment in UTM Watch's detail window, plus the events within five minutes of it.",
      "inputSchema": ["type": "object", "properties": ["time": ["type": "string", "description": timeHelp]], "required": ["time"]]],
     ["name": "get_metrics",
-     "description": "The trend of one metric over a range, reduced to a chosen number of points with the average and peak of each. Metrics per VM: cpu (cores), memory (GB), download, upload, disk_read, disk_write (MB/s), ping (ms from the Mac to the VM). For ping, the target may also be \"router\", \"internet\" (the faster of the servers each round), or one server's address as listed by summarize.",
+     "description": "The trend of one metric over a range, reduced to a chosen number of points with the average and peak of each. Metrics per VM: cpu (cores), memory (GB), download, upload, disk_read, disk_write (MB/s), disk_used (GB in use on the VM's disk; get_moment gives the disk's size), ping (ms from the Mac to the VM). For ping, the target may also be \"router\", \"internet\" (the faster of the servers each round), or one server's address as listed by summarize.",
      "inputSchema": ["type": "object", "properties": [
-        "metric": ["type": "string", "enum": ["cpu", "memory", "download", "upload", "disk_read", "disk_write", "ping"]],
+        "metric": ["type": "string", "enum": ["cpu", "memory", "download", "upload", "disk_read", "disk_write", "disk_used", "ping"]],
         "vm": ["type": "string", "description": "VM name as shown in UTM, or \"router\" / \"internet\" for ping."],
         "from": ["type": "string", "description": "Start of the range. " + timeHelp],
         "to": ["type": "string", "description": "End of the range. Default now."],
@@ -446,7 +449,8 @@ func runTool(_ name: String, _ args: [String: Any], _ src: Source, now: Int64) t
         case "upload": out["unit"] = "MB/s"; pick = { ($0.up.map { $0 / 1e6 }, $0.upMax.map { $0 / 1e6 }) }
         case "disk_read": out["unit"] = "MB/s"; pick = { ($0.diskRead.map { $0 / 1e6 }, nil) }
         case "disk_write": out["unit"] = "MB/s"; pick = { ($0.diskWrite.map { $0 / 1e6 }, nil) }
-        default: throw ToolError(message: "Unknown metric \"\(metric)\". Use cpu, memory, download, upload, disk_read, disk_write or ping.")
+        case "disk_used": out["unit"] = "GB"; pick = { ($0.diskUsed.map { $0 / gib }, nil) }
+        default: throw ToolError(message: "Unknown metric \"\(metric)\". Use cpu, memory, download, upload, disk_read, disk_write, disk_used or ping.")
         }
         out["vm"] = vm.name
         out["points"] = (h.series[vm.key] ?? []).compactMap { p -> [String: Any]? in

@@ -8,12 +8,15 @@ public struct EventDetector {
     public var swapClearFraction = 0.75
     public var cpuLimitFraction = 0.9
     public var cpuLimitSeconds: Double = 60
+    public var diskHighFraction = 0.9
+    public var diskClearFraction = 0.85
 
     private var running: [String: String]?        // key -> name; nil until the first snapshot
     private var pressure: Int?
     private var swapHigh = false
     private var cpuHighSince: [String: Date] = [:]
     private var cpuFlagged: Set<String> = []
+    private var diskHigh: Set<String> = []
 
     private var linkKind: String?
     private var weakCount = 0
@@ -27,6 +30,9 @@ public struct EventDetector {
         pressure = level
         swapHigh = high
     }
+
+    /// The VMs whose disks were already nearly full when recording last stopped.
+    public mutating func seed(diskHigh keys: Set<String>) { diskHigh = keys }
 
     /// Link events from a probe round: the link going away or changing type, and Wi-Fi turning weak.
     public mutating func ingest(_ p: ProbeResult) -> [HistoryEvent] {
@@ -113,6 +119,18 @@ public struct EventDetector {
             } else {
                 cpuHighSince[row.id] = nil
                 cpuFlagged.remove(row.id)
+            }
+        }
+
+        // A VM's disk 90% full, with hysteresis. The state outlives the VM stopping: the disk is as full as it was.
+        for row in s.rows where row.pid != nil {
+            guard let used = row.diskFraction else { continue }
+            if !diskHigh.contains(row.id), used >= diskHighFraction {
+                diskHigh.insert(row.id)
+                out.append(HistoryEvent(ts: ts, kind: "disk_high", vmKey: row.id, label: "\(row.name) disk \(Int(diskHighFraction * 100))% full"))
+            } else if diskHigh.contains(row.id), used < diskClearFraction {
+                diskHigh.remove(row.id)
+                out.append(HistoryEvent(ts: ts, kind: "disk_normal", vmKey: row.id, label: "\(row.name) disk back under \(Int(diskHighFraction * 100))%"))
             }
         }
         return out

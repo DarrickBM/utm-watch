@@ -121,7 +121,7 @@ struct BriefView: View {
         }
         .font(.system(size: 12))
         .padding(.horizontal, 16).padding(.vertical, 14)
-        .frame(width: 392)
+        .frame(width: 500) // wide enough for three meters per VM (CPU, memory, disk) without clipping
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.12)))
         .coordinateSpace(name: "brief")
@@ -218,6 +218,11 @@ private struct VMBriefRow: View {
                     Meter(label: "Memory", value: Format.memoryPair(vm.memoryBytes, vm.memoryAllocatedBytes),
                           fraction: fraction(vm.memoryBytes.map { Double($0) }, vm.memoryAllocatedBytes.map { Double($0) }),
                           color: color, explanation: nil, active: $explanation)
+                }
+                // Missing when the VM's disk images cannot be read; the other two bars then share the row as before.
+                if let used = vm.diskUsedBytes, let size = vm.diskSizeBytes {
+                    Meter(label: "Disk", value: Format.memoryPair(used, size), fraction: vm.diskFraction,
+                          color: color, explanation: Explain.disk(vm), active: $explanation)
                 }
             }
         }

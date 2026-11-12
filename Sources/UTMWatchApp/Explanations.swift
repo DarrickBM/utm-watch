@@ -39,6 +39,11 @@ enum Explain {
         return "Wi-Fi signal is weak (\(rssi) dBm). Remote sessions to the VMs will lag or drop even though the VMs themselves are fine. Moving the Mac closer to the router, or using Ethernet, fixes it."
     }
 
+    static func disk(_ vm: VMRow) -> String? {
+        guard let fraction = vm.diskFraction, fraction >= 0.9, let used = vm.diskUsedBytes, let size = vm.diskSizeBytes else { return nil }
+        return "\(vm.name)'s disk is \(Int((fraction * 100).rounded()))% full (\(Format.memoryPair(used, size))). A guest that runs out of disk space stops saving work and can fail to start. Free space inside the VM, or make its disk larger in UTM."
+    }
+
     static func cpu(_ vm: VMRow) -> String? {
         guard let used = vm.cpuCores, let limit = vm.cpuAllocated, limit > 0, used >= 0.9 * Double(limit) else { return nil }
         return "\(vm.name) is using \(String(format: "%.1f", used)) of its \(limit) cores. It is at its CPU limit, so work inside it is waiting for processor time. Giving it more cores in UTM would help if this lasts."

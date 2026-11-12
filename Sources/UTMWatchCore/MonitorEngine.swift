@@ -22,6 +22,7 @@ public final class MonitorEngine {
     private var pidBundle: [Int32: String] = [:]          // pid -> bundle path
     private var pidOtherApp: [Int32: String] = [:]        // pid -> app that owns a VM outside UTM
     private var bundles: [String: UTMBundle] = [:]        // bundle path -> config
+    private var disks: [String: DiskUsage] = [:]          // bundle path -> how full its disks are
     private var macToInterface: [String: String] = [:]
     private var utmList: [UTMListedVM]?
     private var utmError: UTMScriptingError?
@@ -63,6 +64,7 @@ public final class MonitorEngine {
     private struct ConfigResult {
         var bundles: [String: UTMBundle]
         var macToInterface: [String: String]
+        var disks: [String: DiskUsage]
     }
 
     /// Bundle configs and the bridge table: local file and ifconfig reads, normally well under a second.
@@ -73,11 +75,16 @@ public final class MonitorEngine {
             if let b = UTMBundles.load(url: URL(fileURLWithPath: path, isDirectory: true)) { found[path] = b }
         }
         let bridges = BridgeTable.vmBridges(from: InterfaceList.read().keys)
-        return ConfigResult(bundles: found, macToInterface: BridgeTable.read(bridges: bridges))
+        // A few small reads per disk image, so it rides along with the configs rather than every sample.
+        var disks: [String: DiskUsage] = [:]
+        for (path, b) in found { if let d = DiskImages.usage(bundle: b) { disks[path] = d } }
+        return ConfigResult(bundles: found, macToInterface: BridgeTable.read(bridges: bridges), disks: disks)
     }
 
     private func apply(_ r: ConfigResult) {
         bundles = r.bundles
+        // A reading that fails once (the VM was mid-write) keeps the previous one instead of blanking the figure.
+        disks = disks.filter { r.bundles[$0.key] != nil }.merging(r.disks) { _, new in new }
         if !r.macToInterface.isEmpty || macToInterface.isEmpty { macToInterface = r.macToInterface }
     }
 
@@ -209,6 +216,7 @@ public final class MonitorEngine {
                 row.diskReadRate = u?.diskReadRate
                 row.diskWriteRate = u?.diskWriteRate
                 row.residentBytes = u?.resident
+                if let d = disks[path] { row.diskUsedBytes = d.usedBytes; row.diskSizeBytes = d.sizeBytes; row.diskExact = d.exact }
                 rows.append(row)
             } else {
                 // Not a UTM VM. Its memory is left out of `vmFootprints`, so it counts as other use of
@@ -232,9 +240,11 @@ public final class MonitorEngine {
         for b in bundles.values where !usedBundles.contains(b.url.path) {
             let listed = utmEntry(for: b)
             let status = listed.map { VMStatus(utmStatus: $0.status) } ?? .stopped
-            rows.append(VMRow(id: b.identity, name: b.name, backend: b.backend, status: status, identified: true,
-                              isMacOS: b.isMacOS, cpuAllocated: b.cpuCount ?? listed?.cpuCores,
-                              memoryAllocatedBytes: b.memoryBytes ?? listed?.memoryBytes))
+            var row = VMRow(id: b.identity, name: b.name, backend: b.backend, status: status, identified: true,
+                            isMacOS: b.isMacOS, cpuAllocated: b.cpuCount ?? listed?.cpuCores,
+                            memoryAllocatedBytes: b.memoryBytes ?? listed?.memoryBytes)
+            if let d = disks[b.url.path] { row.diskUsedBytes = d.usedBytes; row.diskSizeBytes = d.sizeBytes; row.diskExact = d.exact }
+            rows.append(row)
         }
         // UTM knows about VMs stored outside the default folder.
         let coveredIds = Set(rows.map(\.id)), coveredNames = Set(rows.map(\.name))

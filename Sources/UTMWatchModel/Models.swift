@@ -57,6 +57,17 @@ public struct VMRow: Codable, Equatable {
     public var diskWriteRate: Double? = nil
     /// The part of `memoryBytes` that is in physical RAM right now. The rest has been compressed or swapped by the Mac.
     public var residentBytes: UInt64? = nil
+    /// How much of the VM's disks is in use, and the size they were created with. nil when the disk images cannot be read.
+    public var diskUsedBytes: UInt64? = nil
+    public var diskSizeBytes: UInt64? = nil
+    /// True when `diskUsedBytes` is the guest filesystem's own count; false when it is the room the image takes on the Mac.
+    public var diskExact: Bool? = nil
+
+    /// Share of the disk in use, 0...1.
+    public var diskFraction: Double? {
+        guard let used = diskUsedBytes, let size = diskSizeBytes, size > 0 else { return nil }
+        return min(1, Double(used) / Double(size))
+    }
 
     public init(id: String, name: String, backend: VMBackend, status: VMStatus, pid: Int32? = nil,
                 identified: Bool, isMacOS: Bool = false, cpuCores: Double? = nil, cpuAllocated: Int? = nil,

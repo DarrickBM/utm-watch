@@ -198,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             w.delegate = self
             w.contentView = NSHostingView(rootView: DetailView(model: model, settings: settings, detail: detail,
                                                                onSettings: { [weak self] in self?.showSettings() }))
-            w.contentMinSize = NSSize(width: 1180, height: 720)
+            w.contentMinSize = NSSize(width: 1180, height: 800)
             w.center()
             w.setFrameAutosaveName("UTMWatchDetail")
             detailWindow = w
@@ -234,13 +234,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showFleet() {
         guard fleet.offersFleetWindow else { return } // a Mac that only reports has no fleet window
         if fleetWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1340, height: 820),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             w.title = "UTM Watch Fleet"
             w.isReleasedWhenClosed = false
             w.delegate = self
             w.contentView = NSHostingView(rootView: FleetWindowView(fleet: fleet, settings: settings, onSettings: { [weak self] in self?.showSettings() }))
-            w.contentMinSize = NSSize(width: 1180, height: 720)
+            w.contentMinSize = NSSize(width: 1340, height: 720)
             w.center()
             w.setFrameAutosaveName("UTMWatchFleet")
             fleetWindow = w

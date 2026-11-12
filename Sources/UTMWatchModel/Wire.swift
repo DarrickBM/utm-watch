@@ -64,6 +64,9 @@ public struct IngestBatch: Codable, Equatable {
     public var configs: [Config] = []
     /// [vm index, ts, cpu, mem, down, up, downTotal, upTotal, diskRead, diskWrite, res]
     public var samples: [[Double?]] = []
+    /// [vm index, ts, diskUsed, diskSize] for the samples that carry a disk reading. Sent beside `samples` rather than
+    /// as extra columns so a hub that predates it still stores the rest; absent from Macs that predate it.
+    public var disks: [[Double?]]?
     /// [ts, used, other, allocatable, pressure, swapUsed, swapTotal, cores, cpu]
     public var host: [[Double?]] = []
     public var targets: [String] = []

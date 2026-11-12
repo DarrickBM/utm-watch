@@ -206,6 +206,8 @@ public enum Diagnostics {
             d["uploadMBps"] = stats(pts.compactMap { p in (p.upMax ?? p.up).map { (p.t, $0 / 1e6) } })
             d["diskWriteMBps"] = stats(pts.compactMap { p in p.diskWrite.map { (p.t, $0 / 1e6) } })
             d["diskReadMBps"] = stats(pts.compactMap { p in p.diskRead.map { (p.t, $0 / 1e6) } })
+            d["diskUsedPercent"] = stats(pts.compactMap { p in p.diskFraction.map { (p.t, $0 * 100) } })
+            if let size = pts.last(where: { $0.diskSize != nil })?.diskSize { d["diskSizeGB"] = round3(size / 1_073_741_824) }
             d["pingMs"] = probeStats(h.probes[ProbeTarget.vm(vm.key)] ?? [])
             vms.append(d.compactMapValues { $0 })
         }

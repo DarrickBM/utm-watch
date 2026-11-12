@@ -87,6 +87,7 @@ final class AppModel: ObservableObject {
             // Carry the last known state across a restart (if it is fresh) so active conditions are not re-logged.
             if let last = recent.host.last, now - last.t < 10 * 60_000 {
                 detector.seed(pressure: last.pressure, swapHigh: last.swapTotal > 0 && last.swapUsed / last.swapTotal >= 0.8)
+                detector.seed(diskHigh: Set(recent.series.filter { ($0.value.last?.diskFraction ?? 0) >= 0.9 }.keys))
             }
             FileLog.shared.log("history store open at \(s.path), \(s.stats().sampleCount) host samples")
         } catch {

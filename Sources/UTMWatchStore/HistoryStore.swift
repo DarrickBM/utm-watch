@@ -57,6 +57,10 @@ public final class HistoryStore {
             // a version change makes an older copy of the app drop the whole history, and this keeps it.
             try addColumnIfMissing(table: "sample", column: "res", type: "REAL")
             try addColumnIfMissing(table: "sample_1m", column: "res_avg", type: "REAL")
+            for table in ["sample", "sample_1m"] {
+                try addColumnIfMissing(table: table, column: "disk_used", type: "REAL")
+                try addColumnIfMissing(table: table, column: "disk_size", type: "REAL")
+            }
             try db.exec("PRAGMA user_version = \(HistoryStore.schemaVersion)")
         }
         try loadCaches()
@@ -116,7 +120,7 @@ public final class HistoryStore {
         queue.sync {
             do {
                 try db.exec("BEGIN")
-                let insSample = try db.prepare("INSERT OR REPLACE INTO sample VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+                let insSample = try db.prepare("INSERT OR REPLACE INTO sample VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
                 let insHost = try db.prepare("INSERT OR REPLACE INTO host_sample VALUES(?,?,?,?,?,?,?,?,?)")
                 let insProbe = try db.prepare("INSERT OR REPLACE INTO probe VALUES(?,?,?,?)")
                 let insLink = try db.prepare("INSERT OR REPLACE INTO link_sample VALUES(?,?,?,?,?,?,?,?)")
@@ -134,7 +138,8 @@ public final class HistoryStore {
                         }
                         let p = VMPoint(row: row, ts: ts)
                         insSample.bind(1, id).bind(2, ts).bind(3, p.cpu).bind(4, p.mem).bind(5, p.down).bind(6, p.up)
-                            .bind(7, p.downTotal).bind(8, p.upTotal).bind(9, p.diskRead).bind(10, p.diskWrite).bind(11, p.res).run()
+                            .bind(7, p.downTotal).bind(8, p.upTotal).bind(9, p.diskRead).bind(10, p.diskWrite).bind(11, p.res)
+                            .bind(12, p.diskUsed).bind(13, p.diskSize).run()
                     }
                     let h = HostPoint(snapshot: snap)
                     insHost.bind(1, h.t).bind(2, h.used).bind(3, h.other).bind(4, h.allocatable).bind(5, Int64(h.pressure))

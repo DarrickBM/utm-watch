@@ -57,7 +57,7 @@ public extension HistoryStore {
                         b.cursor.sampleTs = hq.int(0)
                     }
                     let sq = try db.prepare("""
-                        SELECT vm_id, ts, cpu, mem, down, up, down_total, up_total, disk_read, disk_write, res
+                        SELECT vm_id, ts, cpu, mem, down, up, down_total, up_total, disk_read, disk_write, res, disk_used, disk_size
                         FROM sample WHERE ts > ? AND ts <= ? ORDER BY ts, vm_id
                         """).bind(1, cursor.sampleTs).bind(2, b.cursor.sampleTs)
                     while sq.step() {
@@ -69,6 +69,9 @@ public extension HistoryStore {
                         }
                         b.samples.append([Double(index), Double(sq.int(1)), sq.doubleOrNil(2), sq.doubleOrNil(3), sq.doubleOrNil(4), sq.doubleOrNil(5),
                                           sq.doubleOrNil(6), sq.doubleOrNil(7), sq.doubleOrNil(8), sq.doubleOrNil(9), sq.doubleOrNil(10)])
+                        if let used = sq.doubleOrNil(11) {
+                            b.disks = (b.disks ?? []) + [[Double(index), Double(sq.int(1)), used, sq.doubleOrNil(12)]]
+                        }
                     }
                     // Limits: those that changed in this slice, plus the one already in force when it began.
                     for (id, index) in vmIndex.sorted(by: { $0.value < $1.value }) {
