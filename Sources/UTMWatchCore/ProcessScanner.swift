@@ -9,7 +9,7 @@ public struct VMProcess: Hashable {
     public var backend: VMBackend {
         let base = (executablePath as NSString).lastPathComponent
         if base == ProcessScanner.appleExecutable { return .apple }
-        if base == ProcessScanner.utmQEMUHelper || base.hasPrefix(ProcessScanner.qemuPrefix) { return .qemu }
+        if base == ProcessScanner.utmQEMULauncher || base.hasPrefix(ProcessScanner.qemuPrefix) { return .qemu }
         return .unknown
     }
 }
@@ -18,14 +18,14 @@ public struct VMProcess: Hashable {
 public enum ProcessScanner {
     /// Apple Virtualization.framework helper (UTM "Apple" backend, also Tart, Lume, ...).
     public static let appleExecutable = "com.apple.Virtualization.VirtualMachine"
-    /// UTM runs QEMU inside its QEMUHelper.xpc service rather than as qemu-system-*.
-    public static let utmQEMUHelper = "QEMUHelper"
+    /// UTM runs QEMU in a QEMULauncher process, a child of its QEMUHelper.xpc service, rather than as qemu-system-*.
+    public static let utmQEMULauncher = "QEMULauncher"
     /// Standalone QEMU (Homebrew etc.).
     public static let qemuPrefix = "qemu-system-"
 
     public static func isVMExecutable(_ path: String) -> Bool {
         let base = (path as NSString).lastPathComponent
-        return base == appleExecutable || base == utmQEMUHelper || base.hasPrefix(qemuPrefix)
+        return base == appleExecutable || base == utmQEMULauncher || base.hasPrefix(qemuPrefix)
     }
 
     public static func scan() -> [VMProcess] {

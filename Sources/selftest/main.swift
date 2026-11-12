@@ -54,7 +54,8 @@ do {
 
     check(ProcessScanner.isVMExecutable("/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"), "Apple VM helper detected")
     check(ProcessScanner.isVMExecutable("/Applications/UTM.app/Contents/Frameworks/qemu-system-aarch64"), "QEMU detected")
-    check(ProcessScanner.isVMExecutable("/Applications/UTM.app/Contents/XPCServices/QEMUHelper.xpc/Contents/MacOS/QEMUHelper"), "UTM QEMU helper detected")
+    check(ProcessScanner.isVMExecutable("/Applications/UTM.app/Contents/XPCServices/QEMUHelper.xpc/Contents/MacOS/QEMULauncher.app/Contents/MacOS/QEMULauncher"), "UTM QEMU launcher detected")
+    check(!ProcessScanner.isVMExecutable("/Applications/UTM.app/Contents/XPCServices/QEMUHelper.xpc/Contents/MacOS/QEMUHelper"), "UTM's QEMUHelper service is not the VM")
     check(!ProcessScanner.isVMExecutable("/Applications/UTM.app/Contents/MacOS/UTM"), "UTM itself is not a VM")
 
     let ifconfig = """
