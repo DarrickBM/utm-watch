@@ -106,4 +106,6 @@ Recommended key: reusable, tagged, pre-approved, not ephemeral. Tagged nodes do 
   another Mac from the command line: `utmwatch-hub token create --enroll --view` makes a code whose Mac may view.
 - Ad-hoc signed builds make macOS ask for permissions again after each update, on every Mac.
 - Testing aids: `UTMWATCH_DATA_DIR` moves the app's files; `UTMWATCH_NO_UTM=1` keeps a trial copy away from UTM;
-  `utmwatch fleet sim` imitates Macs; `--snapshot-fleet <png>` pictures the fleet window.
+  `UTMWATCH_NO_UTM_FILES=1` imitates a refused files permission; `utmwatch fleet sim` imitates Macs;
+  `--snapshot-fleet <png>` pictures the fleet window; `--snapshot-settings <png> --snapshot-height <points>`
+  pictures Settings, tall enough to show every section.

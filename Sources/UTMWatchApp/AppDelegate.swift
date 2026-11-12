@@ -171,6 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 .background(Color(nsColor: .windowBackgroundColor)), to: p)
         }
         if let p = path("--snapshot-settings") {
+            SettingsView.snapshotHeight = path("--snapshot-height").flatMap(Double.init).map { CGFloat($0) }
             capture(SettingsView(settings: settings, model: model, fleet: fleet, onClearData: {}), to: p)
         }
     }

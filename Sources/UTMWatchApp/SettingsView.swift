@@ -104,15 +104,25 @@ struct SettingsView: View {
                 LabeledContent {
                     status(utmStatus.ok, utmStatus.text)
                 } label: { Text("Control UTM"); Text("VM names and states") }
+                // One row for the one permission. Refused, it is named after the way to grant it: the ordinary prompt
+                // ("data from other apps") can stay refused after Allow on some Macs, and Full Disk Access cannot.
                 LabeledContent {
-                    // UTM reports the same settings itself, so a refusal here costs nothing while UTM can be asked.
-                    if filesStatus.denied && utmStatus.ok { status(true, "Not needed") } else { status(filesStatus.ok, filesStatus.text) }
+                    VStack(alignment: .trailing, spacing: 6) {
+                        status(filesStatus.ok, filesStatus.text)
+                        if filesStatus.denied {
+                            Button("Open Full Disk Access…") { SettingsView.openFullDiskAccess() }
+                        }
+                    }
                 } label: {
-                    Text("Read UTM's VM files")
-                    Text(filesStatus.denied && utmStatus.ok ? "macOS refuses this, so limits and network mapping come from UTM itself"
-                                                            : "CPU and memory limits, network mapping")
+                    if filesStatus.denied {
+                        Text("Full Disk Access")
+                        Text("Lets UTM Watch read UTM's VM files to see which VMs run macOS.")
+                    } else {
+                        Text("Read UTM's VM files")
+                        Text("Which VMs run macOS; also limits and network mapping when UTM cannot be asked")
+                    }
                 }
-                if utmStatus.text == "Denied" {
+                if filesStatus.denied || utmStatus.text == "Denied" {
                     LabeledContent {
                         Button("Reset and ask again…") { confirmReset = true }
                             .confirmationDialog("Reset UTM Watch's permissions?", isPresented: $confirmReset) {
@@ -148,7 +158,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .onAppear { loadStats() }
         // A fixed height with the form scrolling inside: the Fleet section grows and shrinks with its state.
-        .frame(width: 560, height: 720)
+        .frame(width: 560, height: SettingsView.snapshotHeight ?? 720)
     }
 
     private func status(_ ok: Bool, _ text: String) -> some View {
@@ -167,10 +177,14 @@ struct SettingsView: View {
         return (true, "Granted")
     }
 
+    /// Debug aid: `--snapshot-height <points>` makes the settings picture tall enough to show every section.
+    static var snapshotHeight: CGFloat?
+
     private static var lastFilesError: String?
 
     /// A missing folder is not a refusal: UTM may not be installed, or may never have made a VM.
     private var filesStatus: (ok: Bool, text: String, denied: Bool) {
+        if UTMBundles.filesDisabled { return (false, "Not granted", true) } // the test aid imitates a refusal
         do {
             _ = try FileManager.default.contentsOfDirectory(atPath: UTMBundles.defaultDirectory.path)
             return (true, "Granted", false)
@@ -198,6 +212,23 @@ struct SettingsView: View {
             try? p.run(); p.waitUntilExit()
             FileLog.shared.log("permissions: reset \(service), status \(p.terminationStatus)")
         }
+        relaunch()
+    }
+
+    /// Opens the Full Disk Access list. macOS only lists an app there once it has tried to open something that
+    /// list guards, so one such file is opened first; nothing is read from it.
+    static func openFullDiskAccess() {
+        let guarded = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db")
+        if let handle = try? FileHandle(forReadingFrom: guarded) { try? handle.close() }
+        FileLog.shared.log("permissions: opening Full Disk Access")
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Closes the app and opens it again; a permission changed in System Settings applies to the new process.
+    static func relaunch() {
         let again = Process()
         again.executableURL = URL(fileURLWithPath: "/bin/sh")
         again.arguments = ["-c", "while kill -0 \"$0\" 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$1\"",
