@@ -23,7 +23,7 @@ struct CLIOptions {
       --units <mb|mbps>    Network units: MB/s (default) or Mbps
       --hide-stopped       Start with stopped VMs hidden
       --no-utm             Skip the UTM AppleScript query (names from .utm bundles only)
-      --swap-directions    Treat vmenet in/out the other way round (see README, R1)
+      --swap-directions    Treat vmenet in/out the other way round (see docs/HOW-IT-WORKS.md)
       --log <path>         Append collector errors to this file
       -h, --help           Show this help
 

@@ -1,10 +1,39 @@
-# UTM Watch
+<div align="center">
 
-See what each of your [UTM](https://mac.getutm.app) virtual machines is really doing, and find out why one was slow.
+# UTM Watch: a VM monitor for UTM on Mac
+
+**See what each of your [UTM](https://mac.getutm.app) virtual machines is doing, and find out why one was slow.**
+
+<br />
+
+[![Star this repo](https://img.shields.io/github/stars/DarrickBM/utm-watch?style=for-the-badge&logo=github&label=%E2%AD%90%20Star%20this%20repo&color=yellow)](https://github.com/DarrickBM/utm-watch/stargazers)
+
+[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?style=for-the-badge&logo=apple&logoColor=white)](#install)
+&nbsp;
+[![Apple silicon](https://img.shields.io/badge/Apple_silicon-arm64-555555?style=for-the-badge)](#install)
+&nbsp;
+[![MCP server](https://img.shields.io/badge/MCP-server-6E56CF?style=for-the-badge)](#ai-diagnosis-with-an-mcp-server)
+&nbsp;
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
+
+[Install](#install) · [Features](#features) · [AI diagnosis](#ai-diagnosis-with-an-mcp-server) · [Fleet](#monitor-several-macs-as-a-fleet) · [Terminal tool](#terminal-tool) · [How it works](docs/HOW-IT-WORKS.md)
+
+</div>
 
 ![UTM Watch detail window with a pinned moment](docs/images/detail-window-pinned.png)
 
+## Why UTM Watch
+
 UTM shows whether a VM is on or off. Activity Monitor shows two processes with the same name. Neither tells you which VM is eating the CPU, how close you are to running out of memory, or whether the lag your remote user felt came from the VM, the Mac, or the Wi-Fi. UTM Watch does.
+
+| Question | UTM | Activity Monitor | UTM Watch |
+|---|---|---|---|
+| Which VM is using the CPU? | No | Process names only | Every VM by name |
+| How full is each VM's disk? | No | No | Yes, read from the disk image |
+| What happened at 3:12 pm? | No | No | Recorded history you can scrub |
+| Was it the VM, the Mac or the network? | No | No | Ping and link quality next to VM load |
+
+## Features
 
 - **Every VM by name**, with CPU, memory, how full its disk is, network and ping, live in the menu bar.
 - **A quick look without opening a window**: hover the menu bar item for every VM and the Mac at a glance. Click it for the full window.
@@ -14,14 +43,10 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 - **Recorded history** you can scrub back through, to see exactly what was happening at a past moment.
 - **The whole connection path**: ping to each VM, to your router and to the internet, plus Wi-Fi or Ethernet link quality, so you can tell a slow VM from a slow network.
 - **Fleets**: several Macs report to one hub, and one window shows every Mac and its VMs. Free, with no accounts.
-
-  ![The Fleet window on the hub Mac: every Mac with its VMs](docs/images/fleet-window.png)
-
 - **AI diagnosis** through a read-only MCP server: ask an agent such as Claude why a VM was slow, on this Mac or any Mac in the fleet, and it reads the history and tells you.
+- **Works with both UTM backends**: Apple Virtualization and QEMU, with macOS, Linux and Windows guests.
 
-  ![Claude answering why the VMs were slow, from UTM Watch's history](docs/images/ai-diagnosis.png)
-
-UTM Watch is an independent project. It is not affiliated with or endorsed by the UTM project. Licensed under the MIT License; see `LICENSE`.
+UTM Watch is an independent project. It is not affiliated with or endorsed by the UTM project.
 
 ## Install
 
@@ -47,7 +72,19 @@ xattr -dr com.apple.quarantine /Applications/UTMWatch.app
 > **After an update, give the permissions again.**
 > macOS treats the updated app as new. It asks for control of UTM again, and it may refuse UTM's VM files until you turn Full Disk Access for UTM Watch off and on again in System Settings › Privacy & Security, then quit UTM Watch and open it again. If it keeps refusing, use **Reset and ask again…** in UTM Watch's Settings › Permissions. Until then VMs show without their names, limits or disk usage.
 
-**Let an AI agent read the history (optional).**
+## What is in the box
+
+| Part | What it does |
+|---|---|
+| **Menu bar app** (`UTMWatch.app`) | Live figures in the menu bar, a hover brief, and a detail window with trend tracks and recorded history. |
+| **Terminal tool** (`utmwatch`) | The same live table in a terminal, or one JSON snapshot for scripts. |
+| **MCP server** (`utmwatch-mcp`, inside the app) | Read-only tools over the recorded history, for AI agents. |
+
+History is stored in `~/Library/Application Support/UTM Watch/history.sqlite`.
+
+## AI diagnosis with an MCP server
+
+The app bundle contains `utmwatch-mcp`, a read-only [Model Context Protocol](https://modelcontextprotocol.io) server over standard input/output. An agent on this Mac can use it to read the recorded history and work out why a VM was slow. Connect Claude Code with:
 
 ```bash
 claude mcp add utm-watch -- /Applications/UTMWatch.app/Contents/MacOS/utmwatch-mcp
@@ -55,16 +92,48 @@ claude mcp add utm-watch -- /Applications/UTMWatch.app/Contents/MacOS/utmwatch-m
 
 Then ask, for example: "A user says connecting to one of my VMs is sometimes slow. Use utm-watch to find out why."
 
-## What is in the box
+![Claude answering why the VMs were slow, from UTM Watch's history](docs/images/ai-diagnosis.png)
 
-- **Menu bar app** (`UTMWatch.app`): live figures in the menu bar, a hover brief, and a detail window with trend tracks.
-- **Terminal tool** (`utmwatch`): the same live table in a terminal.
-- **MCP server** (`utmwatch-mcp`, inside the app): six read-only tools over the recorded history.
+| Tool | What it answers |
+|---|---|
+| `find_incidents` | When were VMs slow? Start here when someone reports slowness without a time. |
+| `summarize` | What happened over a time range, VM by VM. |
+| `get_moment` | Everything recorded at one moment. |
+| `get_metrics` | One metric over time for a VM, the Mac or the network. |
+| `list_events` | VM starts and stops, memory pressure and swap, VMs at their CPU limit, Wi-Fi and link changes, sleep and wake. |
+| `get_status` | The latest sample: every VM, the Mac and the network now. |
+| `list_macs` | Every Mac in the fleet (on a Mac that has joined one). |
 
-To build from source, see "Build and run" and "Menu bar app" below.
+Access can be switched off in the app's Settings under AI diagnosis.
+
+## Monitor several Macs as a fleet
+
+![The Fleet window on the hub Mac: every Mac with its VMs](docs/images/fleet-window.png)
+
+UTM Watch on one Mac needs nothing below. With several Macs, one of them hosts a **hub** and the others report to it; the hub Mac can then open **Open Fleet** from the menu bar item and see every Mac's VMs, and click a Mac for its history. The other Macs only report: they cannot see the fleet.
+
+1. On the Mac that will host the hub: Settings › Fleet › **Host the hub on this Mac**, then **New pairing code**.
+2. On each other Mac: Settings › Fleet, paste the code, **Join**. A code adds one Mac and works once, for 15 minutes.
+
+A Mac that joins uploads its last 24 hours, then new history every ten seconds. If the hub cannot be reached it keeps recording and fills the gap later. The hub Mac has to stay on and logged in.
+
+**Macs on other networks.** On the hub Mac, under "Connect Macs on other networks", paste an auth key from your own Tailscale account (reusable, tagged, pre-approved). UTM Watch then carries its own hidden Tailscale node: nothing appears in the menu bar or in System Settings, and a Tailscale you already run is left alone. Pairing codes made after that work from any network.
+
+**A hub on a server.** The same hub runs on Linux:
+
+```sh
+docker build -f Hub/Dockerfile -t utm-watch-hub . && docker run -d -p 127.0.0.1:8787:8787 -v hub-data:/data utm-watch-hub
+docker exec <container> utmwatch-hub token create --enroll     # a pairing token
+utmwatch fleet enroll --hub http://hub-address:8787 --code <token>
+```
+
+**AI diagnosis across the fleet.** On a Mac that has joined, the MCP server offers `list_macs`, and every tool takes an optional `mac` (a name or UUID). Without `mac` a tool answers for the Mac it runs on, from its own database, exactly as before; that keeps working when the hub is down.
+
+`utmwatch fleet status`, `leave`, `view` and `sim` are command-line equivalents and testing aids. The design is in [docs/DESIGN-fleet.md](docs/DESIGN-fleet.md).
 
 ## Terminal tool
-A terminal tool that lists every running virtual machine on this Mac **by its UTM name** with live CPU, memory and network usage, and tells you how much memory and how many cores are still allocatable. The collection layer (`UTMWatchCore`) is a library shared with the menu bar app.
+
+`utmwatch` lists every running virtual machine on this Mac **by its UTM name** with live CPU, memory and network usage, and tells you how much memory and how many cores are still allocatable.
 
 ```
 utmwatch · 2 VM · 4.2 cores · refresh 2s                                 00:34:00
@@ -77,17 +146,6 @@ Headroom  macOS VMs 2/2 (full)  ·  Allocatable 8.7 GB (free now 8.5 GB)  ·  Co
 Host      Memory pressure normal  ·  Swap 3.1 GB / 4.0 GB  ·  Used 39.5 GB of 48.0 GB (23.3 GB outside VMs)
 ```
 
-## Build and run
-
-Requires macOS 26 on Apple silicon and the Swift toolchain from Xcode or the Command Line Tools. No third-party dependencies, no root.
-
-```bash
-swift build -c release
-.build/release/utmwatch
-```
-
-Options:
-
 | Flag | Meaning |
 |---|---|
 | `--interval 1\|2\|5` | Refresh interval in seconds (default 2) |
@@ -96,10 +154,25 @@ Options:
 | `--units mb\|mbps` | Network in MB/s (default) or Mbps |
 | `--hide-stopped` | Start with stopped VMs hidden |
 | `--no-utm` | Skip the UTM AppleScript query; names come from `.utm` bundles only |
-| `--swap-directions` | Treat vmenet in/out the other way round (see "Traffic direction") |
+| `--swap-directions` | Treat vmenet in/out the other way round (see [Traffic direction](docs/HOW-IT-WORKS.md#traffic-direction)) |
 | `--log <path>` | Append collector errors to a file |
 
 Keys while running: `1` `2` `5` change the interval (takes effect immediately), `s` cycles the sort (name, CPU, memory, network), `h` hides/shows stopped VMs, `u` toggles MB/s and Mbps, `r` re-reads the VM list now, `q` quits.
+
+## How it works
+
+UTM Watch reads each VM's process for CPU and memory, its `vmenetN` interface for network, and its disk image for disk usage, all read-only and without anything installed in the guest. It matches processes to VMs through the disk image each process holds open, and gets names and states from UTM's AppleScript interface. Only NAT ("Shared") networking is supported in this version; bridged VMs show no network.
+
+[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) explains what each number means, how VMs are identified, the permissions involved and the implementation details.
+
+## Build from source
+
+Requires macOS 26 on Apple silicon and the Swift toolchain from Xcode or the Command Line Tools. The terminal tool and the app have no third-party dependencies and need no root.
+
+```bash
+swift build -c release
+.build/release/utmwatch
+```
 
 Self-checks for the pure logic (Command Line Tools ship no XCTest, so this is a plain executable):
 
@@ -107,56 +180,7 @@ Self-checks for the pure logic (Command Line Tools ship no XCTest, so this is a 
 swift run selftest
 ```
 
-## What the numbers mean
-
-| Column | Definition | Source |
-|---|---|---|
-| CPU | Process CPU time (user + system) delta ÷ real elapsed time, in cores. 1.0 = one core fully busy. | `proc_pid_rusage` |
-| Memory | Physical footprint of the VM process, **including compressed pages**; matches Activity Monitor's Memory column. It is shown against the VM's configured RAM, but it covers the whole VM process, including memory the Mac uses on the VM's behalf, so it can read higher than the configured RAM. Once a guest has touched all its memory the footprint barely moves, so the detail window's Memory track also plots how much of the footprint is **in RAM right now** (solid) against the footprint (dashed). | `proc_pid_rusage`, `config.plist` |
-| Disk | Space in use inside the VM against how much its main volume holds, read every 10 seconds from the disk image file, read-only and without asking the guest. The figure is the guest filesystem's own count: APFS (macOS), ext2/3/4, Btrfs and XFS (Linux, also inside LVM) and NTFS (Windows), in raw and qcow2 images. For a disk that cannot be read this way (encrypted, compressed qcow2, another filesystem) it is the room the image takes on the Mac against the disk's nominal size. An event is recorded when a disk passes 90%. | the VM's disk image in `Data/`: partition table, then the filesystem's superblock, space manager or allocation bitmap |
-| ↓ Down / ↑ Up | Bytes per second on the VM's `vmenetN` interface, from the guest's point of view. | per-interface MIB (64-bit counters) |
-| Total ↓/↑ | Bytes since the interface was created (i.e. since the VM booted). | same |
-| Allocatable | total RAM − memory used by macOS and your apps (measured, not a fixed reserve) − configured RAM of all running VMs. VMs can grow to their limit, so limits are counted, not current footprints. | `host_statistics64`, `config.plist` |
-| free now | total RAM − Activity Monitor "Memory Used". Includes file cache that macOS can reclaim. | `host_statistics64` |
-| Cores allocated | Sum of configured CPU counts of running VMs vs physical cores. Over the physical count means VMs compete under full load. | `config.plist`, `hw.ncpu` |
-| macOS VMs | Running Apple-backend macOS guests; macOS allows at most two at once. | `config.plist` |
-
-Memory uses binary units (8192 MiB shows as 8 GB, like UTM and Activity Monitor). Network uses decimal units (1 MB/s = 1,000,000 bytes/s), like other network tools.
-
-VM memory tends to climb towards its limit and stay there even when the guest frees memory; that is how the hypervisor works, not a leak.
-
-## How VMs are identified
-
-1. **Process → VM**: every VM process (`com.apple.Virtualization.VirtualMachine` for the Apple backend, UTM's `QEMULauncher` or a standalone `qemu-system-*` for QEMU) holds its disk image inside `<Name>.utm/Data/` open. The open-file list of the process gives the bundle. Processes that hold no `.utm` file (Lume, Tart, Parallels...) are listed as `Unidentified VM (PID n)` with CPU and memory but no network.
-2. **VM → interface**: the VM's MAC address (`Network.0.MacAddress` in `config.plist`) is looked up in the bridge's learned-address table (`ifconfig bridge100`, "Address cache"), which names the `vmenetN` member. The entry appears once the VM has sent traffic; until then the row shows `—` and a note.
-3. **Name and status**: UTM's AppleScript interface (`virtual machines`: name, status, backend), refreshed every 10 s and whenever a VM process appears or disappears. If UTM is not running, automation is denied, or UTM does not answer, the tool keeps working: names come from the `.utm` bundle, status is inferred from whether a process exists, and a note says so. Failed queries are retried after a minute (or on `r`) so a pending permission prompt is not re-triggered every 10 seconds.
-
-Only NAT ("Shared") networking is supported in this version; bridged VMs show no network.
-
-## Permissions
-
-No root is needed, but macOS may show two prompts the first time `utmwatch` runs from a given terminal app:
-
-- **"… would like to access data from other apps"**: the VM configs live in UTM's container (`~/Library/Containers/com.utmapp.UTM`). Deny it and names still come from the bundle path, but CPU/memory limits, MAC addresses (so network columns) and the macOS-VM count are unavailable.
-- **"… wants access to control UTM"** (Automation): used only for VM names and states. Deny it and status is inferred from the process list.
-
-The display never waits on these dialogs: the first frame appears within about two seconds with whatever is available, and a note explains what is still pending.
-
-## Traffic direction
-
-On the host, bytes the `vmenetN` interface **sends** are bytes going **into** the VM (the guest's download), and bytes it **receives** are the guest's upload. The totals on this machine support that reading (a freshly installed VM shows gigabytes "sent" by its vmenet). It still needs the PRD's acceptance check: download a file of known size inside a VM and compare the Total ↓ column. If it turns out reversed, run with `--swap-directions` and flip the default in `MonitorEngine.Options`.
-
-## Implementation notes
-
-- `Sources/CSysShim`: C wrappers for `libproc` (`proc_listpids`, `proc_pidpath`, `proc_pid_rusage`, `PROC_PIDFDVNODEPATHINFO`), interface counters and `host_statistics64`.
-- Interface byte counters come from the per-interface MIB (`net.link.generic.ifdata.<index>.general`), because on current macOS the `NET_RT_IFLIST2` `if_data64` byte fields wrap at 32 bits. `NET_RT_IFLIST2` is only used to enumerate names and indexes.
-- All rates use the monotonic clock and the real elapsed time between samples. A sample is dropped (shown as `—`) when a counter goes backwards or an interface was rebuilt (new index), e.g. after a VM restart.
-- Slow sources (UTM query, `ifconfig`, bundle configs) run on a background queue so a hung AppleEvent never blocks the display.
-- Everything in `UTMWatchCore` is UI-independent; `utmwatch` only parses flags, draws with ANSI escapes and handles keys.
-
-## Menu bar app
-
-`Scripts/make-app.sh` builds and signs `build/UTMWatch.app` (with your Apple Development certificate if you have one, otherwise ad hoc); `Scripts/make-release.sh` produces the downloadable archives in `dist/`. The app is a menu bar item with a hover brief, a detail window with trend tracks and recorded history, and Settings. Design notes are in `docs/DESIGN-menu-bar-app.md`.
+`Scripts/make-app.sh` builds and signs `build/UTMWatch.app` (with your Apple Development certificate if you have one, otherwise ad hoc); `Scripts/make-release.sh` produces the downloadable archives in `dist/`. Design notes are in [docs/DESIGN-menu-bar-app.md](docs/DESIGN-menu-bar-app.md).
 
 ```bash
 Scripts/make-app.sh
@@ -166,45 +190,30 @@ Scripts/make-app.sh
 open build/UTMWatch.app
 ```
 
-On first launch macOS asks for three permissions: access to data from other apps (UTM's VM files), control of UTM, and the local network (pings to your router and VMs). History is stored in `~/Library/Application Support/UTM Watch/history.sqlite`.
-
-## Fleet: several Macs, one view
-
-UTM Watch on one Mac needs nothing below. With several Macs, one of them hosts a **hub** and the others report to it;
-the hub Mac can then open **Open Fleet** from the menu bar item and see every Mac's VMs, and click a Mac for its history. The other Macs only report: they cannot see the fleet.
-
-1. On the Mac that will host the hub: Settings › Fleet › **Host the hub on this Mac**, then **New pairing code**.
-2. On each other Mac: Settings › Fleet, paste the code, **Join**. A code adds one Mac and works once, for 15 minutes.
-
-A Mac that joins uploads its last 24 hours, then new history every ten seconds. If the hub cannot be reached it keeps
-recording and fills the gap later. The hub Mac has to stay on and logged in.
-
-**Macs on other networks.** On the hub Mac, under "Connect Macs on other networks", paste an auth key from your own
-Tailscale account (reusable, tagged, pre-approved). UTM Watch then carries its own hidden Tailscale node: nothing
-appears in the menu bar or in System Settings, and a Tailscale you already run is left alone. Pairing codes made after
-that work from any network.
-
-**A hub on a server.** The same hub runs on Linux:
-
-```sh
-docker build -f Hub/Dockerfile -t utm-watch-hub . && docker run -d -p 127.0.0.1:8787:8787 -v hub-data:/data utm-watch-hub
-docker exec <container> utmwatch-hub token create --enroll     # a pairing token
-utmwatch fleet enroll --hub http://hub-address:8787 --code <token>
-```
-
-**AI diagnosis across the fleet.** On a Mac that has joined, the MCP server offers `list_macs`, and every tool takes
-an optional `mac` (a name or UUID). Without `mac` a tool answers for the Mac it runs on, from its own database,
-exactly as before; that keeps working when the hub is down.
-
-`utmwatch fleet status`, `leave`, `view` and `sim` are command-line equivalents and testing aids. The design is in
-[docs/DESIGN-fleet.md](docs/DESIGN-fleet.md).
-
-## AI diagnosis through MCP
-
-The app bundle contains `utmwatch-mcp`, a read-only Model Context Protocol server over standard input/output. An agent started on this Mac can use it to read the recorded history and work out why a VM was slow. Connect Claude Code with:
+To connect Claude Code to a build from source:
 
 ```bash
 claude mcp add utm-watch -- "$(pwd)/build/UTMWatch.app/Contents/MacOS/utmwatch-mcp"
 ```
 
-Tools: `find_incidents`, `get_status`, `list_events`, `summarize`, `get_moment`, `get_metrics`. Start with `find_incidents` when someone reports slowness without a time. Access can be switched off in the app's Settings under AI diagnosis.
+## Contributing
+
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+Built by [DarrickBM](https://github.com/DarrickBM)
+
+<br />
+
+**If UTM Watch is useful to you:**
+
+[![Star this repo](https://img.shields.io/github/stars/DarrickBM/utm-watch?style=for-the-badge&logo=github&label=%E2%AD%90%20Star%20this%20repo&color=yellow)](https://github.com/DarrickBM/utm-watch/stargazers)
+
+</div>
