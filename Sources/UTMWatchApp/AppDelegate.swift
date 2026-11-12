@@ -253,13 +253,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Debug aid: `--snapshot-fleet <png>` opens the fleet window and writes a picture of it after `--snapshot-delay` seconds.
-    /// `--snapshot-fleet-host <name>` first drills into that Mac.
+    /// `--snapshot-fleet-host <name>` first drills into that Mac; `--snapshot-fleet-size <w> <h>` sizes the window.
     private func runDebugFleetSnapshot() {
         let args = CommandLine.arguments
         func value(_ flag: String) -> String? { args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
         guard let path = value("--snapshot-fleet") else { return }
         let delay = value("--snapshot-delay").flatMap(Double.init) ?? 8
         showFleet()
+        if let k = args.firstIndex(of: "--snapshot-fleet-size"), k + 2 < args.count, let w = Double(args[k + 1]), let h = Double(args[k + 2]) {
+            fleetWindow?.setContentSize(NSSize(width: w, height: h))
+        }
         if let name = value("--snapshot-fleet-host") {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay / 2) { [weak self] in
                 guard let self, let host = self.fleet.hosts.first(where: { $0.name == name }) else { return }

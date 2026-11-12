@@ -31,7 +31,8 @@ struct TracksView: View {
     private func strength(_ key: String) -> Double { focus == nil || focus == key ? 1 : 0.16 }
 
     /// Title, unit and per-series readings.
-    private let labelWidth: CGFloat = 200
+    /// Wide enough for a VM's name beside the longest reading, a disk's "43.4 / 74.5 GB".
+    private let labelWidth: CGFloat = 224
     private let labelGap: CGFloat = 16
     /// Axis labels sit to the right of the plot so they never cover data.
     private let gutter: CGFloat = 72
