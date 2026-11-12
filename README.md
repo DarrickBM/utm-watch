@@ -16,14 +16,6 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
   <img src="docs/images/hover-brief.png" width="380" alt="Hover brief under the menu bar item">
 </p>
 
-Hover the menu bar item for a quick look. Click it for the full window.
-
-To give a VM your own name, such as a customer's name, hover its name in the full window and click the pencil. The name is used throughout UTM Watch; UTM itself is not changed. Save an empty name to go back to the UTM name.
-
-UTM Watch looks for a newer release once a day. When there is one, an arrow appears in the menu bar item and an **Update** button beside the title in the hover brief; one click downloads it, replaces the app and restarts it. The check asks GitHub for the latest release and sends nothing about your Mac or its VMs. You can turn it off in Settings.
-
-A beta build updates along the betas: it moves to each next beta and then to the final release, and from there follows final releases only. A final release never offers a beta. To change that by hand, run `defaults write com.darrick.utmwatch betaUpdates -bool YES` (or `NO`) and restart the app.
-
 With several Macs, one of them can show every Mac and its VMs in one window; see [Fleet](#fleet-several-macs-one-view).
 
 ![The Fleet window on the hub Mac: every Mac with its VMs](docs/images/fleet-view.png)
