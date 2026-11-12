@@ -10,15 +10,14 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 - **Recorded history** you can scrub back through, to see exactly what was happening at a past moment.
 - **The whole connection path**: ping to each VM, to your router and to the internet, plus Wi-Fi or Ethernet link quality, so you can tell a slow VM from a slow network.
 - **Fleets**: several Macs report to one hub, and one window shows every Mac and its VMs. Free, with no accounts.
+
+  ![The Fleet window on the hub Mac: every Mac with its VMs](docs/images/fleet-view.png)
+
 - **AI diagnosis** through a read-only MCP server: ask an agent such as Claude why a VM was slow, on this Mac or any Mac in the fleet, and it reads the history and tells you.
 
 <p>
   <img src="docs/images/hover-brief.png" width="380" alt="Hover brief under the menu bar item">
 </p>
-
-With several Macs, one of them can show every Mac and its VMs in one window; see [Fleet](#fleet-several-macs-one-view).
-
-![The Fleet window on the hub Mac: every Mac with its VMs](docs/images/fleet-view.png)
 
 UTM Watch is an independent project. It is not affiliated with or endorsed by the UTM project. Licensed under the MIT License; see `LICENSE`.
 
