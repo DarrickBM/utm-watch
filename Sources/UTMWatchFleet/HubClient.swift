@@ -20,6 +20,8 @@ public final class InProcessTransport: HubTransport {
 /// The real thing: HTTP(S) through URLSession. Blocks the calling thread, so never call it on the main thread.
 public final class URLSessionTransport: HubTransport {
     private let session: URLSession
+    /// Why the most recent request got no answer, for the log. Not synchronised: it is only ever read for a message.
+    public nonisolated(unsafe) static var lastError: String?
 
     /// `proxy` is "host:port" of an HTTP proxy to send everything through: the loopback proxy of the helper that
     /// carries a fleet's traffic over its private network.
@@ -52,8 +54,9 @@ public final class URLSessionTransport: HubTransport {
         }
         var result: HubResponse?
         let done = DispatchSemaphore(value: 0)
-        session.dataTask(with: r) { data, response, _ in
+        session.dataTask(with: r) { data, response, error in
             if let http = response as? HTTPURLResponse { result = HubResponse(status: http.statusCode, body: data ?? Data()) }
+            else if let error = error as NSError? { URLSessionTransport.lastError = "\(error.domain) \(error.code): \(error.localizedDescription)" }
             done.signal()
         }.resume()
         done.wait()

@@ -15,6 +15,7 @@ struct SettingsView: View {
         "claude mcp add utm-watch -- \"\(Bundle.main.bundlePath)/Contents/MacOS/utmwatch-mcp\""
     }
     @State private var confirmClear = false
+    @State private var confirmReset = false
     @State private var stats: HistoryStore.Stats?
 
     private var storageText: String {
@@ -104,8 +105,21 @@ struct SettingsView: View {
                     status(utmStatus.ok, utmStatus.text)
                 } label: { Text("Control UTM"); Text("VM names and states") }
                 LabeledContent {
-                    status(filesReadable, filesReadable ? "Granted" : "Not granted")
+                    status(filesStatus.ok, filesStatus.text)
                 } label: { Text("Read UTM's VM files"); Text("CPU and memory limits, network mapping") }
+                if filesStatus.denied || utmStatus.text == "Denied" {
+                    LabeledContent {
+                        Button("Reset and ask again…") { confirmReset = true }
+                            .confirmationDialog("Reset UTM Watch's permissions?", isPresented: $confirmReset) {
+                                Button("Reset and reopen UTM Watch") { SettingsView.resetPermissionsAndRelaunch() }
+                            } message: {
+                                Text("UTM Watch closes and opens again, and macOS asks twice: to control UTM, and to read data from other apps. Allow both. Nothing recorded is lost.")
+                            }
+                    } label: {
+                        Text("Already allowed it?")
+                        Text("macOS ties a permission to one build of UTM Watch and can keep refusing after an update without asking again. Resetting makes it ask once more.")
+                    }
+                }
                 LabeledContent {
                     Button("Open System Settings") {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
@@ -117,7 +131,8 @@ struct SettingsView: View {
 
             Section {
                 HStack {
-                    Text("UTM Watch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")")
+                    Text("UTM Watch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")"
+                         + ((Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String).map { " (build \($0))" } ?? ""))
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button("Quit UTM Watch") { NSApp.terminate(nil) }
@@ -146,7 +161,33 @@ struct SettingsView: View {
         return (true, "Granted")
     }
 
-    private var filesReadable: Bool {
-        (try? FileManager.default.contentsOfDirectory(atPath: UTMBundles.defaultDirectory.path)) != nil
+    /// A missing folder is not a refusal: UTM may not be installed, or may never have made a VM.
+    private var filesStatus: (ok: Bool, text: String, denied: Bool) {
+        do {
+            _ = try FileManager.default.contentsOfDirectory(atPath: UTMBundles.defaultDirectory.path)
+            return (true, "Granted", false)
+        } catch let error as NSError {
+            let missing = error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError
+            return missing ? (false, "UTM has no VM folder here", false) : (false, "Not granted", true)
+        }
+    }
+
+    /// Forgets what macOS recorded for this app's two permissions and reopens the app, so that it asks again.
+    static func resetPermissionsAndRelaunch() {
+        guard let id = Bundle.main.bundleIdentifier else { return }
+        for service in ["SystemPolicyAppData", "AppleEvents"] {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            p.arguments = ["reset", service, id]
+            p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+            try? p.run(); p.waitUntilExit()
+            FileLog.shared.log("permissions: reset \(service), status \(p.terminationStatus)")
+        }
+        let again = Process()
+        again.executableURL = URL(fileURLWithPath: "/bin/sh")
+        again.arguments = ["-c", "while kill -0 \"$0\" 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$1\"",
+                           String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundlePath]
+        try? again.run()
+        NSApp.terminate(nil)
     }
 }

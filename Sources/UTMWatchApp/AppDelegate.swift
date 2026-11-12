@@ -32,11 +32,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        // The app menu is only seen while a window is open and the app is in the Dock.
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Settings…", action: #selector(openSettingsFromMenu), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide UTM Watch", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Quit UTM Watch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let main = NSMenu()
-        let app = NSMenuItem(); app.submenu = NSMenu()
+        let app = NSMenuItem(); app.submenu = appMenu
         let editItem = NSMenuItem(); editItem.submenu = edit
         main.addItem(app); main.addItem(editItem)
         NSApp.mainMenu = main
+    }
+
+    @objc private func openSettingsFromMenu() { showSettings() }
+
+    /// A menu bar app has no Dock icon. While one of its windows is open it takes one, so the window can be found
+    /// again from the Dock and with ⌘Tab; with the last window closed it goes back to the menu bar alone.
+    private func updateDockPresence() {
+        let open = [detailWindow, settingsWindow, fleetWindow].contains { $0?.isVisible == true }
+        let wanted: NSApplication.ActivationPolicy = open ? .regular : .accessory
+        guard NSApp.activationPolicy() != wanted else { return }
+        NSApp.setActivationPolicy(wanted)
+        if open { NSApp.activate(ignoringOtherApps: true) }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showDetails() }
+        return true
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -58,6 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let name = CommandLine.arguments.firstIndex(of: "--fleet-name").flatMap { $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1] : nil }
             fleet.join(code: CommandLine.arguments[i + 1], name: name ?? "")
         }
+        // The same from the environment, for a real code: the launch line is logged and visible to other processes.
+        if let code = ProcessInfo.processInfo.environment["UTMWATCH_FLEET_JOIN"], !code.isEmpty { fleet.join(code: code, name: "") }
         detail = DetailModel(model: model, settings: settings)
         sampler = Sampler(model: model)
         // Retention: prune at launch, hourly, and whenever the setting changes.
@@ -192,9 +217,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         detail.isActive = true
         NSApp.activate(ignoringOtherApps: true)
         detailWindow?.makeKeyAndOrderFront(nil)
+        updateDockPresence()
     }
 
     func windowWillClose(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in self?.updateDockPresence() } // after the window has gone
         if (notification.object as? NSWindow) === detailWindow { detail.isActive = false }
         if (notification.object as? NSWindow) === fleetWindow {
             fleet.viewActive = false
@@ -219,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if fleet.selected != nil { fleet.remoteDetail.isActive = true }
         NSApp.activate(ignoringOtherApps: true)
         fleetWindow?.makeKeyAndOrderFront(nil)
+        updateDockPresence()
     }
 
     /// Debug aid: `--snapshot-fleet <png>` opens the fleet window and writes a picture of it after `--snapshot-delay` seconds.
@@ -304,6 +332,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
             w.title = "UTM Watch Settings"
             w.isReleasedWhenClosed = false
+            w.delegate = self
             w.contentView = NSHostingView(rootView: SettingsView(settings: settings, model: model, fleet: fleet, onClearData: { [weak self] in
                 self?.model.clearHistory()
                 self?.detail.refresh(force: true)
@@ -315,5 +344,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+        updateDockPresence()
     }
 }

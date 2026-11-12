@@ -9,6 +9,8 @@ cd "$(dirname "$0")/.."
 APP="${OUT_DIR:-build}/UTMWatch.app"
 BUNDLE_ID="com.darrick.utmwatch"
 VERSION="${VERSION:-0.6.0}"
+# The build number tells apart builds that share a version, such as successive betas: the number of commits.
+BUILD="${BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 
 swift build -c release --product UTMWatchApp
 swift build -c release --product utmwatch-mcp
@@ -36,6 +38,8 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # App Transport Security: a fleet's hub is at an address the user chooses (a .local name, a LAN or private-network
 # address) and speaks plain HTTP, with the private network providing the encryption, so HTTP cannot be limited to a
 # list of domains. The update check still insists on https itself (ReleaseInfo.parse).
+# NSAllowsArbitraryLoads must be the only key: macOS ignores it when NSAllowsLocalNetworking is also present, and a
+# hub on the private network (a 100.x address, reached through the helper's proxy) is then refused with error -1022.
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -48,11 +52,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleVersion</key><string>${BUILD}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>UTM Watch pings your router and your virtual machines to measure how responsive they are.</string>
-  <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/><key>NSAllowsArbitraryLoads</key><true/></dict>
+  <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
   <key>NSAppleEventsUsageDescription</key><string>UTM Watch asks UTM for the names and states of your virtual machines.</string>
 </dict>
 </plist>

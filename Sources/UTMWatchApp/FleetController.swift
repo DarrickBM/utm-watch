@@ -206,7 +206,7 @@ final class FleetController: ObservableObject {
     private func finishJoin(error: String) {
         DispatchQueue.main.async {
             self.joining = false; self.joinError = error; self.joinProgress = nil
-            FileLog.shared.log("fleet: join failed: \(error)")
+            FileLog.shared.log("fleet: join failed: \(error) [last network error: \(URLSessionTransport.lastError ?? "none")]")
             // A helper started only for this attempt has nothing to do now. Its state is kept, so that trying again
             // is quick and does not add another device to the fleet's network.
             if self.identity?.viaPrivateNetwork != true, !self.settings.hostHub { self.stopNet(forget: false) }
