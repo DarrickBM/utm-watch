@@ -160,10 +160,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             snapshotWindows.append(w)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 w.setContentSize(host.fittingSize)
-                guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+                guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+                    FileLog.shared.log("snapshot failed: nothing to draw at \(host.bounds)"); return
+                }
                 host.cacheDisplay(in: host.bounds, to: rep)
-                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-                FileLog.shared.log("snapshot written to \(path)")
+                do {
+                    try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    FileLog.shared.log("snapshot written to \(path)")
+                } catch {
+                    FileLog.shared.log("snapshot failed: \(error)")
+                }
             }
         }
         if let p = path("--snapshot-brief") {

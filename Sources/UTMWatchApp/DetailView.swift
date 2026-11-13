@@ -57,9 +57,10 @@ struct DetailView: View {
                                    if d != detail.hover { detail.hover = d }
                                },
                                onPin: { detail.pin = Date(ms: $0) },
-                               availableHeight: geo.size.height, focus: detail.focus, hostName: remote?.name ?? "This Mac")
+                               availableHeight: geo.size.height, focus: detail.focus, hostName: remote?.name ?? "This Mac",
+                               tracks: TrackKind.allCases.filter { !settings.hiddenTracks.contains($0.rawValue) })
                 }
-                .frame(minHeight: 460) // eight tracks: below this the per-VM readings no longer fit beside them
+                .frame(minHeight: 460) // all eight tracks: below this the per-VM readings would mostly scroll
             }
             .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 10)
             // White content between the grey toolbar and footer, as in the design.

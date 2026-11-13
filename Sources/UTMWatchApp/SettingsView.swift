@@ -56,6 +56,24 @@ struct SettingsView: View {
                 }
             }
 
+            Section {
+                ForEach(TrackKind.allCases) { kind in
+                    Toggle(isOn: Binding(get: { !settings.hiddenTracks.contains(kind.rawValue) },
+                                         set: { on in
+                                             if on { settings.hiddenTracks.remove(kind.rawValue) } else { settings.hiddenTracks.insert(kind.rawValue) }
+                                         })) {
+                        Text(kind.title)
+                        Text(kind.summary)
+                    }
+                }
+            } header: {
+                Text("Tracks")
+            } footer: {
+                Text("Hidden tracks are still recorded, and an AI agent can still read them. Swap warnings still appear on the timeline.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             FleetSettingsSection(fleet: fleet, settings: settings, onOpenFleet: onOpenFleet)
 
             Section {

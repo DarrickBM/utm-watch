@@ -2,6 +2,49 @@ import SwiftUI
 import UTMWatchCore
 import UTMWatchStore
 
+/// One trend track in the detail window. Which ones show is a setting; all are recorded either way.
+enum TrackKind: String, CaseIterable, Identifiable {
+    case cpu, memory, swap, disk, down, up, ping, path
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .cpu: "CPU"
+        case .memory: "Memory"
+        case .swap: "Host swap"
+        case .disk: "Disk"
+        case .down: "Network ↓"
+        case .up: "Network ↑"
+        case .ping: "Responsiveness"
+        case .path: "Network path"
+        }
+    }
+
+    /// One line for Settings saying what the track plots.
+    var summary: String {
+        switch self {
+        case .cpu: "Cores busy per VM against its limit"
+        case .memory: "Each VM in RAM and held by the Mac"
+        case .swap: "This Mac's swap in use"
+        case .disk: "Space used inside each VM"
+        case .down: "Traffic into each VM"
+        case .up: "Traffic out of each VM"
+        case .ping: "How fast each VM answers a ping"
+        case .path: "Ping from the Mac to the router and the internet"
+        }
+    }
+
+    /// Relative height in the stack.
+    var weight: CGFloat {
+        switch self {
+        case .cpu: 1.3
+        case .swap: 0.75
+        case .ping: 1.1
+        default: 1
+        }
+    }
+}
+
 /// Stacked trend tracks on one shared time axis: events, CPU, memory, host swap, disk, network down and up, and ping.
 /// Each track carries its own readings beside the plot, and periods of weak Wi-Fi and
 /// missing data are shaded through every track so cause and effect line up by eye.
@@ -28,6 +71,11 @@ struct TracksView: View {
     var focus: String? = nil
     /// What the host's own lines are called: "This Mac", or another Mac's name in the fleet window.
     var hostName = "This Mac"
+    /// The tracks to draw, top to bottom.
+    var tracks: [TrackKind] = TrackKind.allCases
+    /// VMs from other apps (Docker Desktop, Tart, ...) are folded into a "+N" line until this is set.
+    /// Debug aid: `--snapshot-others` starts expanded, so a snapshot can show them.
+    @State private var othersExpanded = CommandLine.arguments.contains("--snapshot-others")
     private func strength(_ key: String) -> Double { focus == nil || focus == key ? 1 : 0.16 }
 
     /// Title, unit and per-series readings.
@@ -37,8 +85,6 @@ struct TracksView: View {
     /// Axis labels sit to the right of the plot so they never cover data.
     private let gutter: CGFloat = 72
     private let axisHeight: CGFloat = 20
-    /// Relative heights: CPU, memory, host swap, disk, network down, network up, responsiveness, network path.
-    private static let weights: [CGFloat] = [1.3, 1, 0.75, 1, 1, 1, 1.1, 1]
 
     private struct Layout {
         var unit: CGFloat
@@ -51,8 +97,8 @@ struct TracksView: View {
     private var layout: Layout {
         let rows: CGFloat = history.events.count <= 1 ? 1 : (history.events.count <= 4 ? 2 : 3)
         guard availableHeight > 0 else { return Layout(unit: 84, spacing: 12, events: rows * 18, compact: false) }
-        let total = Self.weights.reduce(0, +)
-        let count = CGFloat(Self.weights.count)
+        let total = max(1, tracks.map(\.weight).reduce(0, +))
+        let count = CGFloat(tracks.count)
         func unit(spacing: CGFloat, events: CGFloat) -> CGFloat {
             (availableHeight - events - axisHeight - spacing * (count + 1)) / total
         }
@@ -61,7 +107,14 @@ struct TracksView: View {
         let events = min(rows, 2) * 18
         return Layout(unit: max(34, unit(spacing: 6, events: events)), spacing: 6, events: events, compact: true)
     }
-    private func height(_ index: Int) -> CGFloat { (layout.unit * Self.weights[index]).rounded() }
+    private func height(_ kind: TrackKind) -> CGFloat { (layout.unit * kind.weight).rounded() }
+
+    /// VMs whose lines and readings are drawn: every UTM VM, and those from other apps once expanded.
+    /// A focused VM from another app is drawn even while folded, so focusing it never hides it.
+    private var shownVMs: [VMInfo] {
+        history.vms.filter { !OtherVMs.isOther(key: $0.key) || othersExpanded || $0.key == focus }
+    }
+    private var otherCount: Int { history.vms.filter { OtherVMs.isOther(key: $0.key) }.count }
 
     private struct Spec {
         var title: String
@@ -173,23 +226,9 @@ struct TracksView: View {
                 .frame(width: labelWidth - labelGap, alignment: .leading).padding(.trailing, labelGap)
                 eventsLane.frame(height: layout.events).padding(.trailing, gutter)
             }
-            vmTrack(0, s[0], height: height(0))
-            vmTrack(1, s[1], height: height(1))
-            swapTrack(height: height(2))
-            vmTrack(3, s[2], height: height(3))
-            vmTrack(4, s[3], height: height(4))
-            vmTrack(5, s[4], height: height(5))
-            probeTrack(6, title: "Responsiveness", unit: "VM ping", height: height(6),
-                       explanation: "How long each VM takes to answer a ping from this Mac.\n\nHow it is measured: every 10 seconds UTM Watch sends one ping (an ICMP echo) to the VM's address on the Mac's internal network and times the reply, waiting up to 1 second. The address comes from the Mac's ARP table, matched by the VM's MAC address. The reply never leaves the Mac, so it normally takes under 1 ms; a higher value means the VM itself was slow to react. A red tick is a ping with no reply. Over long time frames each point is the average and the faint line is the worst.",
-                       series: history.vms.map { ProbeSeries(key: $0.key, name: $0.name, color: color($0.key), points: history.probes[ProbeTarget.vm($0.key)] ?? []) })
-            probeTrack(7, title: "Network path", unit: "from the Mac", height: height(7),
-                       explanation: "How long it takes to reach your router and the internet from this Mac. It separates network trouble from VM trouble: when a remote session lags while Responsiveness stays flat, the cause is on this path.\n\nHow it is measured: every 10 seconds, one ping to the router and one to the internet, each waiting up to 1 second. A red tick is a ping with no reply. Hover Router or Internet to see what each one covers.",
-                       series: [
-                ProbeSeries(name: "Router", color: SeriesPalette.color(index: 2, scheme: scheme), points: history.probes[ProbeTarget.gateway] ?? [],
-                            explanation: "Router: the first stop for anything leaving this Mac, also called the default gateway. UTM Watch finds it from the Mac's routing table.\n\nThe time covers only the Mac's own link to the router, over Wi-Fi or cable. High values or lost pings mean that link was poor: weak Wi-Fi signal, interference, or a busy router. A short spike on its own can also be the router being slow to answer pings while it still passes traffic normally. If Internet stays flat at the same moment, traffic was not affected."),
-                ProbeSeries(name: "Internet", color: SeriesPalette.color(index: 6, scheme: scheme), points: history.probes[ProbeTarget.internet] ?? [],
-                            explanation: "Internet: a public server outside your network. UTM Watch pings two (1.1.1.1 and 223.5.5.5) and keeps the faster reply, so one server being unreachable does not look like an outage.\n\nThe time covers the whole way out: the Mac's link, your router, and your internet provider. If this rises while Router stays flat, the trouble is beyond your router. If both rise together, it is the Mac's own link. A remote user reaches a VM over this same path, so trouble here feels like lag even when the VM is fine."),
-            ])
+            ForEach(Array(tracks.enumerated()), id: \.element) { index, kind in
+                track(kind, index: index, specs: s)
+            }
             HStack(spacing: 0) {
                 Color.clear.frame(width: labelWidth, height: axisHeight)
                 axis.frame(height: axisHeight)
@@ -217,14 +256,59 @@ struct TracksView: View {
         }
     }
 
+    @ViewBuilder
+    private func track(_ kind: TrackKind, index: Int, specs s: [Spec]) -> some View {
+        let h = height(kind)
+        switch kind {
+        case .cpu: vmTrack(index, s[0], height: h)
+        case .memory: vmTrack(index, s[1], height: h)
+        case .swap: swapTrack(index, height: h)
+        case .disk: vmTrack(index, s[2], height: h)
+        case .down: vmTrack(index, s[3], height: h)
+        case .up: vmTrack(index, s[4], height: h)
+        case .ping:
+            probeTrack(index, title: "Responsiveness", unit: "VM ping", height: h, foldsOthers: true,
+                       explanation: "How long each VM takes to answer a ping from this Mac.\n\nHow it is measured: every 10 seconds UTM Watch sends one ping (an ICMP echo) to the VM's address on the Mac's internal network and times the reply, waiting up to 1 second. The address comes from the Mac's ARP table, matched by the VM's MAC address. The reply never leaves the Mac, so it normally takes under 1 ms; a higher value means the VM itself was slow to react. A red tick is a ping with no reply. Over long time frames each point is the average and the faint line is the worst.",
+                       series: shownVMs.map { ProbeSeries(key: $0.key, name: $0.name, color: color($0.key), points: history.probes[ProbeTarget.vm($0.key)] ?? []) })
+        case .path:
+            probeTrack(index, title: "Network path", unit: "from the Mac", height: h,
+                       explanation: "How long it takes to reach your router and the internet from this Mac. It separates network trouble from VM trouble: when a remote session lags while Responsiveness stays flat, the cause is on this path.\n\nHow it is measured: every 10 seconds, one ping to the router and one to the internet, each waiting up to 1 second. A red tick is a ping with no reply. Hover Router or Internet to see what each one covers.",
+                       series: [
+                ProbeSeries(name: "Router", color: SeriesPalette.color(index: 2, scheme: scheme), points: history.probes[ProbeTarget.gateway] ?? [],
+                            explanation: "Router: the first stop for anything leaving this Mac, also called the default gateway. UTM Watch finds it from the Mac's routing table.\n\nThe time covers only the Mac's own link to the router, over Wi-Fi or cable. High values or lost pings mean that link was poor: weak Wi-Fi signal, interference, or a busy router. A short spike on its own can also be the router being slow to answer pings while it still passes traffic normally. If Internet stays flat at the same moment, traffic was not affected."),
+                ProbeSeries(name: "Internet", color: SeriesPalette.color(index: 6, scheme: scheme), points: history.probes[ProbeTarget.internet] ?? [],
+                            explanation: "Internet: a public server outside your network. UTM Watch pings two (1.1.1.1 and 223.5.5.5) and keeps the faster reply, so one server being unreachable does not look like an outage.\n\nThe time covers the whole way out: the Mac's link, your router, and your internet provider. If this rises while Router stays flat, the trouble is beyond your router. If both rise together, it is the Mac's own link. A remote user reaches a VM over this same path, so trouble here feels like lag even when the VM is fine."),
+            ])
+        }
+    }
+
     // MARK: Labels with readings
 
-    /// Title, unit and one line per series with its value at the readout moment.
-    private func label(index: Int, title: String, unit: String, items: [LegendItem], height: CGFloat, explanation: String) -> some View {
-        var ordered = items
-        if let focus, let i = ordered.firstIndex(where: { $0.key == focus }) { ordered.insert(ordered.remove(at: i), at: 0) }
-        let fit = max(1, Int((height - 20) / 16))
-        let shown = ordered.count > fit ? Array(ordered.prefix(fit - 1)) : ordered
+    /// Title, unit and one line per series with its value at the readout moment. Every line is listed; when they do not
+    /// fit beside the track the list scrolls. With `foldsOthers`, VMs from other apps sit below a rule and a link
+    /// folds them away or brings them back, together with their lines in every track.
+    private func label(index: Int, title: String, unit: String, items: [LegendItem], height: CGFloat, explanation: String,
+                       foldsOthers: Bool = false) -> some View {
+        func isOther(_ item: LegendItem) -> Bool { item.key.map(OtherVMs.isOther) ?? false }
+        func focusedFirst(_ list: [LegendItem]) -> [LegendItem] {
+            var l = list
+            if let focus, let i = l.firstIndex(where: { $0.key == focus }) { l.insert(l.remove(at: i), at: 0) }
+            return l
+        }
+        let own = focusedFirst(items.filter { !isOther($0) }), others = focusedFirst(items.filter(isOther))
+        // A focused VM from another app stays drawn while folded, so it is not counted as hidden.
+        let foldable = otherCount - (focus.map(OtherVMs.isOther) == true ? 1 : 0)
+        let toggle = foldsOthers && foldable > 0
+        let lineHeight: CGFloat = 16
+        let listHeight = max(lineHeight, height - 22 - (toggle ? 15 : 0))
+        let needed = CGFloat(own.count + others.count) * lineHeight + (own.isEmpty || others.isEmpty ? 0 : 5)
+        let list = VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(own.enumerated()), id: \.offset) { _, item in legendRow(item, index: index) }
+            if !others.isEmpty {
+                if !own.isEmpty { Divider().padding(.vertical, 2) }
+                ForEach(Array(others.enumerated()), id: \.offset) { _, item in legendRow(item, index: index) }
+            }
+        }
         return VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(title).font(.system(size: 13, weight: .semibold)).fixedSize()
@@ -233,33 +317,46 @@ struct TracksView: View {
                 if !layout.compact { Text(unit).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
             }
             .padding(.bottom, 2)
-            ForEach(Array(shown.enumerated()), id: \.offset) { _, item in
-                HStack(spacing: 6) {
-                    RoundedRectangle(cornerRadius: 1.5).fill(item.color).frame(width: 10, height: 3)
-                    Text(item.name).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
-                    Spacer(minLength: 4)
-                    if item.warning != nil {
-                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10)).foregroundStyle(.orange)
-                            .accessibilityLabel("Warning")
-                    }
-                    Text(item.value).monospacedDigit().fixedSize()
-                }
-                .font(.system(size: 12))
-                .opacity(item.key.map { strength($0) == 1 ? 1 : 0.45 } ?? 1)
-                .contentShape(Rectangle())
-                .onHover { inside in
-                    // Most lines are just a VM's name and its reading. Only a line with a warning, or a term
-                    // that needs explaining (Router, Internet), says something on hover.
-                    let text = [item.warning, item.explanation].compactMap { $0 }.joined(separator: "\n\n")
-                    // Leaving always closes, even if the warning cleared while the pointer was here.
-                    if !inside || !text.isEmpty { explain(index, key: "item \(index) \(item.name)", text, inside) }
-                }
+            if needed > listHeight {
+                // The scroll bar sits in the gap beside the label, so it never narrows the readings.
+                ScrollView(.vertical) { list.frame(width: labelWidth - labelGap, alignment: .leading) }
+                    .frame(width: labelWidth - 4, height: listHeight, alignment: .leading)
+                    .padding(.trailing, -(labelGap - 4))
+            } else {
+                list
             }
-            if shown.count < ordered.count {
-                Text("+\(ordered.count - shown.count) more").font(.system(size: 11)).foregroundStyle(.secondary)
+            if toggle {
+                Button(othersExpanded ? "Hide \(foldable) from other apps" : "+\(foldable) from other apps") { othersExpanded.toggle() }
+                    .buttonStyle(.link).font(.system(size: 11))
+                    .help(othersExpanded ? "Hide the VMs from Docker Desktop, Tart and other apps in every track"
+                                         : "Show the VMs from Docker Desktop, Tart and other apps, with their lines, in every track")
             }
         }
         .frame(width: labelWidth - labelGap, alignment: .leading).padding(.trailing, labelGap)
+    }
+
+    private func legendRow(_ item: LegendItem, index: Int) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 1.5).fill(item.color).frame(width: 10, height: 3)
+            Text(item.name).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 4)
+            if item.warning != nil {
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10)).foregroundStyle(.orange)
+                    .accessibilityLabel("Warning")
+            }
+            Text(item.value).monospacedDigit().fixedSize()
+        }
+        .font(.system(size: 12))
+        .frame(height: 16)
+        .opacity(item.key.map { strength($0) == 1 ? 1 : 0.45 } ?? 1)
+        .contentShape(Rectangle())
+        .onHover { inside in
+            // Most lines are just a VM's name and its reading. Only a line with a warning, or a term
+            // that needs explaining (Router, Internet), says something on hover.
+            let text = [item.warning, item.explanation].compactMap { $0 }.joined(separator: "\n\n")
+            // Leaving always closes, even if the warning cleared while the pointer was here.
+            if !inside || !text.isEmpty { explain(index, key: "item \(index) \(item.name)", text, inside) }
+        }
     }
 
     /// Shows a track's explanation while the pointer rests on its label.
@@ -275,12 +372,12 @@ struct TracksView: View {
     private func rowTop(_ index: Int) -> CGFloat {
         guard index >= 0 else { return 0 }
         var y = layout.events + layout.spacing
-        for i in 0..<index { y += height(i) + layout.spacing }
+        for kind in tracks.prefix(index) { y += height(kind) + layout.spacing }
         return availableHeight > 0 ? min(y, max(0, availableHeight - 230)) : y
     }
 
     private func vmItems(_ spec: Spec) -> [LegendItem] {
-        history.vms.map { vm in
+        shownVMs.map { vm in
             let p = Readout.nearest(history.series[vm.key] ?? [], t: readoutT, tolerance: Readout.tolerance(history), time: { $0.t })
             let cfg = history.config(for: vm.key, at: readoutT)
             return LegendItem(key: vm.key, name: vm.name, color: color(vm.key),
@@ -313,7 +410,7 @@ struct TracksView: View {
 
     private func vmTrack(_ index: Int, _ spec: Spec, height: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 0) {
-            label(index: index, title: spec.title, unit: spec.unit, items: vmItems(spec), height: height, explanation: spec.explanation)
+            label(index: index, title: spec.title, unit: spec.unit, items: vmItems(spec), height: height, explanation: spec.explanation, foldsOthers: true)
             Canvas { ctx, size in
                 func y(_ v: Double) -> CGFloat { size.height - CGFloat(min(1.08, v / spec.yMax)) * size.height * 0.92 }
                 let half = (spec.yMax / 2, spec.label(spec.yMax / 2))
@@ -327,7 +424,7 @@ struct TracksView: View {
                 // A line is broken wherever samples are missing (Mac asleep, app not running, VM stopped).
                 let gap = max(history.bucketMs * 3, 10_000)
                 let showPeaks = history.bucketMs > 5000
-                for vm in history.vms {
+                for vm in shownVMs {
                     let points = history.series[vm.key] ?? []
                     let c = color(vm.key)
                     func path(_ f: (VMPoint) -> Double?) -> Path {
@@ -352,7 +449,7 @@ struct TracksView: View {
 
                 // Dots where the readout moment crosses each line.
                 if readout != nil {
-                    for vm in history.vms where strength(vm.key) == 1 {
+                    for vm in shownVMs where strength(vm.key) == 1 {
                         guard let p = Readout.nearest(history.series[vm.key] ?? [], t: readoutT, tolerance: Readout.tolerance(history), time: { $0.t }),
                               let v = spec.value(p) else { continue }
                         dot(&ctx, at: CGPoint(x: fraction(p.t) * w, y: y(v)), color: color(vm.key))
@@ -367,7 +464,7 @@ struct TracksView: View {
     // MARK: Host swap
 
     /// Swap is the host-side cause behind most slow spells, so it gets its own history with the alert line.
-    private func swapTrack(height: CGFloat) -> some View {
+    private func swapTrack(_ index: Int, height: CGFloat) -> some View {
         let total = history.host.map(\.swapTotal).max() ?? 0
         let yMax = total > 0 ? total : max(1_073_741_824.0, history.host.map(\.swapUsed).max() ?? 0)
         let point = Readout.nearest(history.host, t: readoutT, tolerance: Readout.tolerance(history), time: { $0.t })
@@ -386,7 +483,7 @@ struct TracksView: View {
         }
         let unit = total > 0 ? "used of \(Format.memory(UInt64(total)))" : "used"
         return HStack(alignment: .top, spacing: 0) {
-            label(index: 2, title: "Host swap", unit: unit, items: [item], height: height,
+            label(index: index, title: "Host swap", unit: unit, items: [item], height: height,
                   explanation: "How much of this Mac's swap space on disk is in use. Swap fills up when what is running does not fit in RAM, and reading it back is much slower than RAM.\n\nHow it is measured: read from macOS (vm.swapusage) every sample: the bytes in use and the current size of the swap file, which macOS grows as needed. The dashed line is 80% of the largest swap size in this time frame. UTM Watch records an event when use goes above 80%.")
             Canvas { ctx, size in
                 func y(_ v: Double) -> CGFloat { size.height - CGFloat(min(1.08, v / yMax)) * size.height * 0.92 }
@@ -433,7 +530,7 @@ struct TracksView: View {
         }
     }
 
-    private func probeTrack(_ index: Int, title: String, unit: String, height: CGFloat, explanation: String, series: [ProbeSeries]) -> some View {
+    private func probeTrack(_ index: Int, title: String, unit: String, height: CGFloat, foldsOthers: Bool = false, explanation: String, series: [ProbeSeries]) -> some View {
         let yMax = Self.niceMs(series.flatMap { $0.points.compactMap(\.rttMax) }.max() ?? 1)
         let tolerance = max(Readout.tolerance(history), 15_000)
         let items = series.map { s -> LegendItem in
@@ -442,7 +539,7 @@ struct TracksView: View {
                               explanation: s.explanation)
         }
         return HStack(alignment: .top, spacing: 0) {
-            label(index: index, title: title, unit: unit, items: items, height: height, explanation: explanation)
+            label(index: index, title: title, unit: unit, items: items, height: height, explanation: explanation, foldsOthers: foldsOthers)
             Canvas { ctx, size in
                 func y(_ v: Double) -> CGFloat { size.height - CGFloat(min(1.08, v / yMax)) * size.height * 0.92 }
                 let w = drawFrame(&ctx, size: size, y: y, labels: [(yMax, Self.ms(yMax)), (yMax / 2, Self.ms(yMax / 2))])

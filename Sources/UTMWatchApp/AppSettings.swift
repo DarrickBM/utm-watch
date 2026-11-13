@@ -16,6 +16,8 @@ final class AppSettings: ObservableObject {
     @Published var vmAliases: [String: String] { didSet { defaults.set(vmAliases, forKey: "vmAliases") } }
     /// Off hides VMs that do not belong to UTM (Docker Desktop, Tart, ...) from every view. They are still recorded.
     @Published var showOtherVMs: Bool { didSet { defaults.set(showOtherVMs, forKey: "showOtherVMs") } }
+    /// Tracks the detail window leaves out, by `TrackKind` raw value. They are still recorded.
+    @Published var hiddenTracks: Set<String> { didSet { defaults.set(Array(hiddenTracks).sorted(), forKey: "hiddenTracks") } }
     @Published var checkForUpdates: Bool { didSet { defaults.set(checkForUpdates, forKey: "checkForUpdates") } }
     /// Updates include betas. Unless set by hand, a beta build follows the betas and a final release does not, so a
     /// Mac on a beta moves to each next beta and then to the final release, and stays on releases from there.
@@ -41,7 +43,7 @@ final class AppSettings: ObservableObject {
     init() {
         defaults.register(defaults: ["sampleInterval": 2, "rateUnits": RateUnits.bytes.rawValue, "retentionDays": 7,
                                      "allowAgents": true, "captureProcesses": true, "checkForUpdates": true, "showOtherVMs": true,
-                                     "hubPort": 8787, "fleetAlerts": true])
+                                     "hubPort": 8787, "fleetAlerts": true, "hiddenTracks": [TrackKind.swap.rawValue]])
         let interval = defaults.integer(forKey: "sampleInterval")
         sampleInterval = [1, 2, 5].contains(interval) ? interval : 2
         rateUnits = RateUnits(rawValue: defaults.string(forKey: "rateUnits") ?? "") ?? .bytes
@@ -52,6 +54,7 @@ final class AppSettings: ObservableObject {
         vmAliases = defaults.dictionary(forKey: "vmAliases") as? [String: String] ?? [:]
         checkForUpdates = defaults.bool(forKey: "checkForUpdates")
         showOtherVMs = defaults.bool(forKey: "showOtherVMs")
+        hiddenTracks = Set(defaults.stringArray(forKey: "hiddenTracks") ?? [])
         hostHub = defaults.bool(forKey: "hostHub")
         let port = defaults.integer(forKey: "hubPort")
         hubPort = (1024...65535).contains(port) ? port : 8787
