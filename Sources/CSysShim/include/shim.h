@@ -16,6 +16,13 @@ int shim_list_pids(pid_t *buf, int capacity);
 /// Writes the executable path of `pid` into `buf`. Returns length, or <= 0 on failure.
 int shim_proc_path(pid_t pid, char *buf, uint32_t size);
 
+/// Parent process ID. Returns 0 on success.
+int shim_proc_ppid(pid_t pid, pid_t *ppid);
+
+/// Copies the process's arguments (argv[0] first) into `buf`, each ending in a NUL.
+/// Returns the number of bytes written, or -1. Only works for the current user's processes.
+int shim_proc_args(pid_t pid, char *buf, uint32_t size);
+
 /// Process start time (seconds since epoch). Returns 0 on success.
 int shim_proc_start_time(pid_t pid, uint64_t *sec);
 

@@ -86,6 +86,7 @@ func main() {
 		joinWait   = flag.Duration("join-timeout", 60*time.Second, "how long to wait for the node to join")
 		verbose    = flag.Bool("verbose", false, "print Tailscale backend logs to stderr")
 		uploadLogs = flag.Bool("upload-logs", false, "let the node upload its logs to log.tailscale.com (tsnet's default; off here)")
+		withParent = flag.Bool("exit-with-parent", false, "stop when stdin reaches end of file or the parent process goes away; the app holds stdin open for as long as it runs")
 		forwards   forwardFlag
 	)
 	flag.Var(&forwards, "forward", "hub mode: TAILNET_PORT=HOST:PORT, repeatable")
@@ -151,6 +152,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *withParent {
+		ctx = watchParent(ctx)
+	}
 
 	started := time.Now()
 	upCtx, cancel := context.WithTimeout(ctx, *joinWait)
@@ -206,6 +210,37 @@ func main() {
 
 	<-ctx.Done()
 	emit(event{Event: "stopping"})
+}
+
+// watchParent returns a context that ends when the parent app is gone, however it ended: a crash or a forced kill
+// skips the app's own clean-up, and the helper would otherwise run on forever. The app holds the write end of a pipe
+// on our stdin, which the system closes when the app exits, so end of file is the signal. A changed parent process
+// ID (re-parented to launchd) is a second check in case stdin is not that pipe.
+func watchParent(parent context.Context) context.Context {
+	ctx, cancel := context.WithCancel(parent)
+	go func() {
+		io.Copy(io.Discard, os.Stdin)
+		log.Printf("stdin closed: the parent app is gone")
+		cancel()
+	}()
+	ppid := os.Getppid()
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if os.Getppid() != ppid {
+					log.Printf("parent process %d is gone", ppid)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx
 }
 
 func isLoopback(host string) bool {

@@ -40,6 +40,38 @@ int shim_proc_start_time(pid_t pid, uint64_t *sec) {
     return 0;
 }
 
+int shim_proc_ppid(pid_t pid, pid_t *ppid) {
+    struct proc_bsdinfo info;
+    int n = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
+    if (n != (int)sizeof(info)) return -1;
+    *ppid = (pid_t)info.pbi_ppid;
+    return 0;
+}
+
+int shim_proc_args(pid_t pid, char *buf, uint32_t size) {
+    int mib[3] = { CTL_KERN, KERN_PROCARGS2, pid };
+    size_t len = 0;
+    if (sysctl(mib, 3, NULL, &len, NULL, 0) != 0 || len < sizeof(int)) return -1;
+    char *raw = malloc(len);
+    if (!raw) return -1;
+    if (sysctl(mib, 3, raw, &len, NULL, 0) != 0 || len < sizeof(int)) { free(raw); return -1; }
+    // Layout: argc, the executable path, NUL padding, then argc NUL-terminated arguments, then the environment.
+    int argc; memcpy(&argc, raw, sizeof(int));
+    char *p = raw + sizeof(int), *end = raw + len;
+    while (p < end && *p) p++;          // executable path
+    while (p < end && !*p) p++;         // padding
+    uint32_t out = 0;
+    for (int i = 0; i < argc && p < end; i++) {
+        size_t n = strnlen(p, (size_t)(end - p));
+        if (out + n + 1 > size) break;
+        memcpy(buf + out, p, n); buf[out + n] = 0;
+        out += (uint32_t)n + 1;
+        p += n + 1;
+    }
+    free(raw);
+    return (int)out;
+}
+
 static double timebase_ratio(void) {
     static double ratio = 0.0;
     if (ratio == 0.0) {
