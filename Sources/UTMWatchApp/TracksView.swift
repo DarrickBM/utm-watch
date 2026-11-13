@@ -406,6 +406,43 @@ struct TracksView: View {
         ctx.fill(Path(ellipseIn: CGRect(x: c.x - 4, y: c.y - 4, width: 8, height: 8)), with: .color(color))
     }
 
+    /// Whether the dots at the readout moment get value tags: only while a moment is hovered or pinned,
+    /// not for "now" or another Mac's latest sample, where the readings beside the track say it already.
+    private var showsTags: Bool { readout != nil && (hover != nil || pin != nil) }
+
+    /// One small tag per line beside its dot, so the value can be read where the eye already is.
+    /// Tags are pushed apart so they never overlap (the dots stay on their lines), and sit left of
+    /// the dots when they would run past the plot's right edge.
+    private func drawTags(_ ctx: inout GraphicsContext, _ tags: [(at: CGPoint, color: Color, text: String)], plotWidth w: CGFloat, height: CGFloat) {
+        guard !tags.isEmpty else { return }
+        let tagHeight: CGFloat = 16
+        let resolved = tags.map { tag -> (at: CGPoint, color: Color, text: GraphicsContext.ResolvedText, width: CGFloat) in
+            let r = ctx.resolve(Text(tag.text).font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(.primary))
+            return (tag.at, tag.color, r, r.measure(in: CGSize(width: 300, height: tagHeight)).width + 10)
+        }
+        let x = resolved[0].at.x
+        let widest = resolved.map(\.width).max() ?? 0
+        let flip = x + 9 + widest > w
+        // Centres start at each dot; a crowded short track packs them tighter rather than spilling out.
+        let half = tagHeight / 2
+        let step = min(tagHeight + 1, max(12, (height - tagHeight) / CGFloat(max(1, resolved.count - 1))))
+        let order = resolved.indices.sorted { resolved[$0].at.y < resolved[$1].at.y }
+        var centre = order.map { min(max(half, resolved[$0].at.y), height - half) }
+        for k in 1..<max(1, centre.count) where centre[k] - centre[k - 1] < step { centre[k] = centre[k - 1] + step }
+        if let last = centre.last, last > height - half { centre = centre.map { $0 - (last - (height - half)) } }
+        for k in centre.indices where centre[k] < half { centre[k] = half }
+        let background = Color(nsColor: .textBackgroundColor).opacity(0.94)
+        for (k, i) in order.enumerated() {
+            let t = resolved[i]
+            let left = flip ? x - 9 - t.width : x + 9
+            let rect = CGRect(x: left, y: centre[k] - half, width: t.width, height: tagHeight)
+            let shape = Path(roundedRect: rect, cornerRadius: 4)
+            ctx.fill(shape, with: .color(background))
+            ctx.stroke(shape, with: .color(t.color), lineWidth: 1)
+            ctx.draw(t.text, at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+        }
+    }
+
     // MARK: Per-VM tracks
 
     private func vmTrack(_ index: Int, _ spec: Spec, height: CGFloat) -> some View {
@@ -449,11 +486,15 @@ struct TracksView: View {
 
                 // Dots where the readout moment crosses each line.
                 if readout != nil {
+                    var tags: [(at: CGPoint, color: Color, text: String)] = []
                     for vm in shownVMs where strength(vm.key) == 1 {
                         guard let p = Readout.nearest(history.series[vm.key] ?? [], t: readoutT, tolerance: Readout.tolerance(history), time: { $0.t }),
                               let v = spec.value(p) else { continue }
-                        dot(&ctx, at: CGPoint(x: fraction(p.t) * w, y: y(v)), color: color(vm.key))
+                        let at = CGPoint(x: fraction(p.t) * w, y: y(v))
+                        dot(&ctx, at: at, color: color(vm.key))
+                        tags.append((at, color(vm.key), spec.text(p, history.config(for: vm.key, at: readoutT))))
                     }
+                    if showsTags { drawTags(&ctx, tags, plotWidth: w, height: size.height) }
                 }
             }
             .frame(height: height)
@@ -502,7 +543,11 @@ struct TracksView: View {
                     last = pt.t
                 }
                 ctx.stroke(path, with: .color(line), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                if readout != nil, let p = point { dot(&ctx, at: CGPoint(x: fraction(p.t) * w, y: y(p.swapUsed)), color: .primary) }
+                if readout != nil, let p = point {
+                    let at = CGPoint(x: fraction(p.t) * w, y: y(p.swapUsed))
+                    dot(&ctx, at: at, color: .primary)
+                    if showsTags { drawTags(&ctx, [(at, line, item.value)], plotWidth: w, height: size.height) }
+                }
             }
             .frame(height: height)
             .accessibilityLabel("Host swap used over the selected time frame; the dashed line is the 80% alert level")
@@ -544,6 +589,7 @@ struct TracksView: View {
                 func y(_ v: Double) -> CGFloat { size.height - CGFloat(min(1.08, v / yMax)) * size.height * 0.92 }
                 let w = drawFrame(&ctx, size: size, y: y, labels: [(yMax, Self.ms(yMax)), (yMax / 2, Self.ms(yMax / 2))])
                 let gap = max(history.bucketMs * 3, 35_000)
+                var tags: [(at: CGPoint, color: Color, text: String)] = []
                 for s in series {
                     let bucketed = s.points.contains { $0.sent > 1 }
                     func path(_ f: (ProbePoint) -> Double?) -> Path {
@@ -566,9 +612,12 @@ struct TracksView: View {
                         ctx.fill(Path(CGRect(x: x - 1, y: size.height - 8, width: 2, height: 8)), with: .color(.red))
                     }
                     if readout != nil, k == 1, let p = Readout.nearest(s.points, t: readoutT, tolerance: tolerance, time: { $0.t }), let v = p.rtt {
-                        dot(&ctx, at: CGPoint(x: fraction(p.t) * w, y: y(v)), color: s.color)
+                        let at = CGPoint(x: fraction(p.t) * w, y: y(v))
+                        dot(&ctx, at: at, color: s.color)
+                        tags.append((at, s.color, Self.ms(v)))
                     }
                 }
+                if showsTags { drawTags(&ctx, tags, plotWidth: w, height: size.height) }
             }
             .frame(height: height)
             .accessibilityLabel("\(title): ping time over the selected time frame; red ticks mark lost pings")
