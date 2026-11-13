@@ -86,7 +86,7 @@ func openStore() throws -> HistoryStore {
 
 // MARK: - Where the history comes from
 
-/// The fleet this Mac can read, if it has been given a reader token (`utmwatch fleet view`). nil = single-Mac use.
+/// The fleet this Mac can read, if it has a reader token (it hosts the hub, or joined with a code that may view). nil = single-Mac use.
 let fleet: (client: HubClient, token: String)? = {
     guard let id = HostIdentity.load(), let token = id.readerToken, !token.isEmpty else { return nil }
     // A hub on the fleet's private network is reached through the app's helper, which notes its proxy while it runs.
@@ -119,12 +119,12 @@ struct Source {
 func hubError(_ failure: HubFailure) -> ToolError {
     switch failure {
     case .unreachable: return ToolError(message: "The fleet's hub did not answer. This Mac's own history is still available: call the tool without \"mac\".")
-    case .rejected(let status, let message): return ToolError(message: status == 401 ? "The hub refused this Mac's reader token. Run `utmwatch fleet view` again with a new one." : message)
+    case .rejected(let status, let message): return ToolError(message: status == 401 ? "The hub refused this Mac's reader token. Join the fleet again in UTM Watch's Settings › Fleet." : message)
     }
 }
 
 func fleetHosts() throws -> (HubClient, String, [HostStatus]) {
-    guard let fleet else { throw ToolError(message: "This Mac cannot read a fleet. Give it a reader token with `utmwatch fleet view --hub <url> --token <reader token>`.") }
+    guard let fleet else { throw ToolError(message: "This Mac cannot read a fleet. Only the hub Mac, or a Mac that joined with a code made with `--view`, can read the fleet.") }
     switch fleet.client.hosts(token: fleet.token) {
     case .success(let hosts): return (fleet.client, fleet.token, hosts)
     case .failure(let f): throw hubError(f)

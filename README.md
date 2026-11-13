@@ -16,7 +16,7 @@
 &nbsp;
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
-[Install](#install) · [Features](#features) · [AI diagnosis](#ai-diagnosis-with-an-mcp-server) · [Fleet](#monitor-several-macs-as-a-fleet) · [Terminal tool](#terminal-tool) · [How it works](docs/HOW-IT-WORKS.md)
+[Install](#install) · [Features](#features) · [AI diagnosis](#ai-diagnosis-with-an-mcp-server) · [Fleet](#monitor-several-macs-as-a-fleet) · [How it works](docs/HOW-IT-WORKS.md)
 
 </div>
 
@@ -52,7 +52,7 @@ UTM Watch is an independent project. It is not affiliated with or endorsed by th
 
 Requires an Apple silicon Mac. Built and tested on macOS 26; set to run on macOS 14 or later, but older versions are untested.
 
-**One command (recommended).** Installs the menu bar app into `/Applications` and the `utmwatch` terminal tool, then starts the app:
+**One command (recommended).** Installs the menu bar app into `/Applications`, then starts the app:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DarrickBM/utm-watch/main/install.sh | bash
@@ -77,7 +77,6 @@ xattr -dr com.apple.quarantine /Applications/UTMWatch.app
 | Part | What it does |
 |---|---|
 | **Menu bar app** (`UTMWatch.app`) | Live figures in the menu bar, a hover brief, and a detail window with trend tracks and recorded history. |
-| **Terminal tool** (`utmwatch`) | The same live table in a terminal, or one JSON snapshot for scripts. |
 | **MCP server** (`utmwatch-mcp`, inside the app) | Read-only tools over the recorded history, for AI agents. |
 
 History is stored in `~/Library/Application Support/UTM Watch/history.sqlite`.
@@ -123,41 +122,14 @@ A Mac that joins uploads its last 24 hours, then new history every ten seconds. 
 
 ```sh
 docker build -f Hub/Dockerfile -t utm-watch-hub . && docker run -d -p 127.0.0.1:8787:8787 -v hub-data:/data utm-watch-hub
-docker exec <container> utmwatch-hub token create --enroll     # a pairing token
-utmwatch fleet enroll --hub http://hub-address:8787 --code <token>
+docker exec <container> utmwatch-hub token create --enroll --hub http://hub-address:8787     # a pairing code
 ```
+
+Paste the code in each Mac's Settings › Fleet and click **Join**. Add `--view` to make a code whose Mac may also view the fleet.
 
 **AI diagnosis across the fleet.** On a Mac that has joined, the MCP server offers `list_macs`, and every tool takes an optional `mac` (a name or UUID). Without `mac` a tool answers for the Mac it runs on, from its own database, exactly as before; that keeps working when the hub is down.
 
-`utmwatch fleet status`, `leave`, `view` and `sim` are command-line equivalents and testing aids. The design is in [docs/DESIGN-fleet.md](docs/DESIGN-fleet.md).
-
-## Terminal tool
-
-`utmwatch` lists every running virtual machine on this Mac **by its UTM name** with live CPU, memory and network usage, and tells you how much memory and how many cores are still allocatable.
-
-```
-utmwatch · 2 VM · 4.2 cores · refresh 2s                                 00:34:00
-
-VM          State     Backend             CPU          Memory       ↓ Down         ↑ Up         Total ↓/↑
-macOS 26    running   Apple     1.1 / 6 cores      8.1 / 8 GB    24.9 KB/s    46.2 KB/s   662 MB / 1.3 GB
-macOS 26 B  running   Apple     2.8 / 4 cores      8.1 / 8 GB   121.3 KB/s   128.0 KB/s   7.3 GB / 2.0 GB
-──────────────────────────────────────────────────────────────────────────────────────────────────────────
-Headroom  macOS VMs 2/2 (full)  ·  Allocatable 8.7 GB (free now 8.5 GB)  ·  Cores allocated 10/14
-Host      Memory pressure normal  ·  Swap 3.1 GB / 4.0 GB  ·  Used 39.5 GB of 48.0 GB (23.3 GB outside VMs)
-```
-
-| Flag | Meaning |
-|---|---|
-| `--interval 1\|2\|5` | Refresh interval in seconds (default 2) |
-| `--once` | Print one table and exit (two samples, `interval` apart) |
-| `--json` | With `--once`: print the snapshot as JSON (for scripts, Hermes, etc.) |
-| `--units mb\|mbps` | Network in MB/s (default) or Mbps |
-| `--hide-stopped` | Start with stopped VMs hidden |
-| `--no-utm` | Skip the UTM AppleScript query; names come from `.utm` bundles only |
-| `--swap-directions` | Treat vmenet in/out the other way round (see [Traffic direction](docs/HOW-IT-WORKS.md#traffic-direction)) |
-| `--log <path>` | Append collector errors to a file |
-
-Keys while running: `1` `2` `5` change the interval (takes effect immediately), `s` cycles the sort (name, CPU, memory, network), `h` hides/shows stopped VMs, `u` toggles MB/s and Mbps, `r` re-reads the VM list now, `q` quits.
+The design is in [docs/DESIGN-fleet.md](docs/DESIGN-fleet.md).
 
 ## How it works
 
@@ -167,12 +139,7 @@ UTM Watch reads each VM's process for CPU and memory, its `vmenetN` interface fo
 
 ## Build from source
 
-Requires macOS 26 on Apple silicon and the Swift toolchain from Xcode or the Command Line Tools. The terminal tool and the app have no third-party dependencies and need no root.
-
-```bash
-swift build -c release
-.build/release/utmwatch
-```
+Requires macOS 26 on Apple silicon and the Swift toolchain from Xcode or the Command Line Tools. The app has no third-party dependencies and needs no root.
 
 Self-checks for the pure logic (Command Line Tools ship no XCTest, so this is a plain executable):
 

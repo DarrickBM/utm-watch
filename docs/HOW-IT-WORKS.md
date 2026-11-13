@@ -24,13 +24,13 @@ VM memory tends to climb towards its limit and stay there even when the guest fr
 
 1. **Process → VM**: every VM process (`com.apple.Virtualization.VirtualMachine` for the Apple backend, UTM's `QEMULauncher` or a standalone `qemu-system-*` for QEMU) holds its disk image inside `<Name>.utm/Data/` open. The open-file list of the process gives the bundle. Processes that hold no `.utm` file (Lume, Tart, Parallels...) are listed as `Unidentified VM (PID n)` with CPU and memory but no network.
 2. **VM → interface**: the VM's MAC address (`Network.0.MacAddress` in `config.plist`) is looked up in the bridge's learned-address table (`ifconfig bridge100`, "Address cache"), which names the `vmenetN` member. The entry appears once the VM has sent traffic; until then the row shows `—` and a note.
-3. **Name and status**: UTM's AppleScript interface (`virtual machines`: name, status, backend), refreshed every 10 s and whenever a VM process appears or disappears. If UTM is not running, automation is denied, or UTM does not answer, the tool keeps working: names come from the `.utm` bundle, status is inferred from whether a process exists, and a note says so. Failed queries are retried after a minute (or on `r`) so a pending permission prompt is not re-triggered every 10 seconds.
+3. **Name and status**: UTM's AppleScript interface (`virtual machines`: name, status, backend), refreshed every 10 s and whenever a VM process appears or disappears. If UTM is not running, automation is denied, or UTM does not answer, UTM Watch keeps working: names come from the `.utm` bundle, status is inferred from whether a process exists, and a note says so. Failed queries are retried after a minute so a pending permission prompt is not re-triggered every 10 seconds.
 
 Only NAT ("Shared") networking is supported in this version; bridged VMs show no network.
 
 ## Permissions
 
-No root is needed, but macOS may show two prompts the first time `utmwatch` runs from a given terminal app:
+No root is needed, but macOS may show these prompts the first time UTM Watch runs:
 
 - **"… would like to access data from other apps"**: the VM configs live in UTM's container (`~/Library/Containers/com.utmapp.UTM`). Deny it and names still come from the bundle path, but CPU/memory limits, MAC addresses (so network columns) and the macOS-VM count are unavailable.
 - **"… wants access to control UTM"** (Automation): used only for VM names and states. Deny it and status is inferred from the process list.
@@ -39,7 +39,7 @@ The display never waits on these dialogs: the first frame appears within about t
 
 ## Traffic direction
 
-On the host, bytes the `vmenetN` interface **sends** are bytes going **into** the VM (the guest's download), and bytes it **receives** are the guest's upload. The totals on this machine support that reading (a freshly installed VM shows gigabytes "sent" by its vmenet). It still needs the PRD's acceptance check: download a file of known size inside a VM and compare the Total ↓ column. If it turns out reversed, run with `--swap-directions` and flip the default in `MonitorEngine.Options`.
+On the host, bytes the `vmenetN` interface **sends** are bytes going **into** the VM (the guest's download), and bytes it **receives** are the guest's upload. The totals on this machine support that reading (a freshly installed VM shows gigabytes "sent" by its vmenet). It still needs the PRD's acceptance check: download a file of known size inside a VM and compare the Total ↓ column. If it turns out reversed, flip the default in `MonitorEngine.Options`.
 
 ## Implementation notes
 
@@ -47,5 +47,5 @@ On the host, bytes the `vmenetN` interface **sends** are bytes going **into** th
 - Interface byte counters come from the per-interface MIB (`net.link.generic.ifdata.<index>.general`), because on current macOS the `NET_RT_IFLIST2` `if_data64` byte fields wrap at 32 bits. `NET_RT_IFLIST2` is only used to enumerate names and indexes.
 - All rates use the monotonic clock and the real elapsed time between samples. A sample is dropped (shown as `—`) when a counter goes backwards or an interface was rebuilt (new index), e.g. after a VM restart.
 - Slow sources (UTM query, `ifconfig`, bundle configs) run on a background queue so a hung AppleEvent never blocks the display.
-- Everything in `UTMWatchCore` is UI-independent; `utmwatch` only parses flags, draws with ANSI escapes and handles keys.
+- Everything in `UTMWatchCore` is UI-independent; the app and the MCP server build on it.
 

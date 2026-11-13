@@ -1,6 +1,6 @@
 // utmwatch-hub: the fleet's data pool.
 //   utmwatch-hub serve [--db PATH] [--host 127.0.0.1] [--port 8787] [--raw-hours 48] [--keep-days 90]
-//   utmwatch-hub token create --enroll | --reader [LABEL]   [--db PATH]
+//   utmwatch-hub token create --enroll [--view] [--hub URL] | --reader [LABEL]   [--db PATH]
 //   utmwatch-hub hosts [--db PATH]
 //   utmwatch-hub revoke HOST-UUID [--db PATH]
 import Foundation
@@ -36,7 +36,9 @@ func nowMs() -> Int64 { Date().msSince1970 }
 let usage = """
 usage:
   utmwatch-hub serve [--db PATH] [--host 127.0.0.1] [--port 8787] [--raw-hours 48] [--keep-days 90]
-  utmwatch-hub token create --enroll | --reader [LABEL] [--db PATH]
+  utmwatch-hub token create --enroll [--view] [--hub URL] | --reader [LABEL] [--db PATH]
+    --hub URL  print a pairing code for the app's Settings › Fleet › Join instead of a bare token
+               (the address Macs reach this hub at, e.g. http://hub-address:8787)
   utmwatch-hub hosts [--db PATH]
   utmwatch-hub revoke HOST-UUID [--db PATH]
 """
@@ -45,7 +47,9 @@ switch args.first {
 case "token":
     guard args.dropFirst().first == "create" else { fail(usage) }
     if flag("--enroll") {
-        print(store.createEnrollToken(now: nowMs(), view: flag("--view")))
+        let hub = option("--hub")
+        let token = store.createEnrollToken(now: nowMs(), view: flag("--view"))
+        print(hub.map { PairingCode(hub: $0, token: token).text } ?? token)
     } else if flag("--reader") {
         print(store.createReaderToken(label: args.dropFirst(2).first ?? "reader", now: nowMs()))
     } else { fail(usage) }

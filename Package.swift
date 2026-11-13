@@ -9,7 +9,6 @@ let package = Package(
         .library(name: "UTMWatchModel", targets: ["UTMWatchModel"]),
         .library(name: "UTMWatchStore", targets: ["UTMWatchStore"]),
         .library(name: "UTMWatchFleet", targets: ["UTMWatchFleet"]),
-        .executable(name: "utmwatch", targets: ["utmwatch"]),
     ],
     targets: [
         .target(name: "CSysShim"),
@@ -18,7 +17,6 @@ let package = Package(
         // System SQLite for Linux; macOS uses the SDK's SQLite3 module.
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])]),
         .target(name: "UTMWatchCore", dependencies: ["CSysShim", "UTMWatchModel"]),
-        .executableTarget(name: "utmwatch", dependencies: ["UTMWatchCore", "UTMWatchStore", "UTMWatchFleet"]),
         // Menu bar app. Packaged into UTMWatch.app by Scripts/make-app.sh.
         .target(name: "UTMWatchStore", dependencies: [
             "UTMWatchModel", .target(name: "CSQLite", condition: .when(platforms: [.linux])),
