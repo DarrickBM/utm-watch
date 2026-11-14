@@ -54,6 +54,9 @@ final class FleetController: ObservableObject {
     private var hubProcess: Process?
     private var hubStore: HubStore?
     private var netProcess: Process?
+    /// The write end of the helper's stdin. The helper stops when it closes, which the system does when this app ends
+    /// in any way, so a crash or a forced quit cannot leave it running.
+    private var netInput: Pipe?
     private var netBuffer = Data()
     private var timer: Timer?
     private var tick = 0
@@ -109,6 +112,7 @@ final class FleetController: ObservableObject {
         let hub = hubProcess, net = netProcess
         hubProcess = nil; netProcess = nil
         hub?.terminate(); net?.terminate()
+        try? netInput?.fileHandleForWriting.close(); netInput = nil
     }
 
     private func everyFiveSeconds() {
@@ -415,6 +419,7 @@ final class FleetController: ObservableObject {
             return
         }
         stopNet(forget: false)
+        endLeftoverNetHelpers()
         // State left by an earlier attempt belongs to the key it was made with; a different key means a different fleet.
         if let key {
             let mark = (netDirectory as NSString).appendingPathComponent("key-id"), id = FleetToken.hash(key)
@@ -427,7 +432,7 @@ final class FleetController: ObservableObject {
         net = .starting
         let p = Process()
         p.executableURL = binary
-        var args = ["-dir", netDirectory, "-proxy", "127.0.0.1:0"]
+        var args = ["-dir", netDirectory, "-proxy", "127.0.0.1:0", "-exit-with-parent"]
         if settings.hostHub { args += ["-forward", "\(settings.hubPort)=127.0.0.1:\(settings.hubPort)"] }
         p.arguments = args
         // The key goes in through the environment, never the command line, where any process could read it.
@@ -436,7 +441,8 @@ final class FleetController: ObservableObject {
         env["TS_AUTHKEY"] = key ?? hubConfig.authKey
         p.environment = env
         let out = Pipe()
-        p.standardOutput = out; p.standardError = FileHandle.nullDevice; p.standardInput = FileHandle.nullDevice
+        let input = Pipe()
+        p.standardOutput = out; p.standardError = FileHandle.nullDevice; p.standardInput = input
         out.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { handle.readabilityHandler = nil; return }
@@ -456,7 +462,20 @@ final class FleetController: ObservableObject {
             return
         }
         netProcess = p
+        netInput = input
         netBuffer = Data()
+    }
+
+    /// Helpers that an earlier copy of the app left behind when it crashed or was killed: they run on forever, and
+    /// several at once share this Mac's node on the fleet's network. Only ones using this app's state folder are ended.
+    private func endLeftoverNetHelpers() {
+        let pids = LeftoverHelpers.find(name: "utmwatch-net", arguments: ["-dir", netDirectory])
+        guard !pids.isEmpty else { return }
+        pids.forEach { kill($0, SIGTERM) }
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline, pids.contains(where: { kill($0, 0) == 0 }) { Thread.sleep(forTimeInterval: 0.05) }
+        pids.filter { kill($0, 0) == 0 }.forEach { kill($0, SIGKILL) }
+        FileLog.shared.log("fleet: ended \(pids.count) network helper(s) left running by an earlier copy of the app")
     }
 
     /// The helper reports one JSON object per line.
@@ -490,6 +509,8 @@ final class FleetController: ObservableObject {
         let p = netProcess
         netProcess = nil
         p?.terminate()
+        try? netInput?.fileHandleForWriting.close()
+        netInput = nil
         net = .off
         try? FileManager.default.removeItem(atPath: HostIdentity.proxyNotePath)
         if forget { try? FileManager.default.removeItem(atPath: netDirectory) }
