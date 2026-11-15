@@ -105,6 +105,9 @@ final class DetailModel: ObservableObject {
     func refresh(force: Bool) {
         guard isActive else { return }
         let to = frameEnd.msSince1970, from = to - Int64(lengthSeconds) * 1000
+        // A pin the frame has moved away from (stepping the range, or a live frame running past it) has no loaded
+        // samples to read, and would describe every VM as not running. Let go of it.
+        if let p = pin?.msSince1970, p < from || p > to { pin = nil }
         if let remoteLoad {
             // Another Mac: ask the hub. A live frame is asked again every five seconds, a fixed one only when it changes.
             if !force, !(isLive && Date().timeIntervalSince(lastQuery) >= 5) { return }
