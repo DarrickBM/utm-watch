@@ -12,6 +12,8 @@ struct AlertRulesView: View {
 
     /// Debug aid: the rule the window opens on.
     static var initialKind: AlertKind = .cpu
+    /// Debug aid, for pictures: a sentence shown as typed and the rule an agent would propose for it.
+    static var demoProposal: (request: String, rule: AlertRule)?
     @State private var selected: AlertKind = AlertRulesView.initialKind
     /// A rule the AI agent proposes, shown in the editor until the user takes or drops it.
     @State private var draft: AlertRule?
@@ -46,6 +48,14 @@ struct AlertRulesView: View {
         .frame(minWidth: 1180, minHeight: 760)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { center.loadReplay() }
+        .onChange(of: center.replayLoaded) {
+            guard center.replayLoaded, draft == nil, let demo = AlertRulesView.demoProposal else { return }
+            AlertRulesView.demoProposal = nil
+            request = demo.request
+            selected = demo.rule.kind
+            setDraft(demo.rule)
+            note = "Your AI agent proposes the rule shown below. Check it against last week, change its numbers if you like, then use it or drop it."
+        }
     }
 
     // MARK: A rule from a sentence

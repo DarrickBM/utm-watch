@@ -2,7 +2,7 @@
 
 # UTM Watch: a VM monitor for UTM on Mac
 
-**See what each of your [UTM](https://mac.getutm.app) virtual machines is doing, and find out why one was slow.**
+**See what each of your [UTM](https://mac.getutm.app) virtual machines is doing, get told when one is in trouble, and let an AI agent find out why.**
 
 <br />
 
@@ -12,11 +12,13 @@
 &nbsp;
 [![Apple silicon](https://img.shields.io/badge/Apple_silicon-arm64-555555?style=for-the-badge)](#install)
 &nbsp;
+[![AI agent: bring your own model](https://img.shields.io/badge/AI_agent-bring_your_own_model-D97757?style=for-the-badge)](#ai-built-in)
+&nbsp;
 [![MCP server](https://img.shields.io/badge/MCP-server-6E56CF?style=for-the-badge)](#ai-diagnosis-with-an-mcp-server)
 &nbsp;
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
-[Install](#install) · [Features](#features) · [AI diagnosis](#ai-diagnosis-with-an-mcp-server) · [Fleet](#monitor-several-macs-as-a-fleet) · [How it works](docs/HOW-IT-WORKS.md)
+[Install](#install) · [Features](#features) · [AI built in](#ai-built-in) · [Alerts](#alerts) · [MCP server](#ai-diagnosis-with-an-mcp-server) · [Fleet](#monitor-several-macs-as-a-fleet) · [How it works](docs/HOW-IT-WORKS.md)
 
 </div>
 
@@ -32,6 +34,8 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 | How full is each VM's disk? | No | No | Yes, read from the disk image |
 | What happened at 3:12 pm? | No | No | Recorded history you can scrub |
 | Was it the VM, the Mac or the network? | No | No | Ping and link quality next to VM load |
+| Will I be told when a VM stops or a disk fills up? | No | No | Alerts on the Mac and on your iPhone |
+| Why did it happen? | No | No | An AI agent reads the history and says |
 
 ## Features
 
@@ -43,10 +47,49 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 - **Recorded history** you can scrub back through, to see exactly what was happening at a past moment.
 - **The whole connection path**: ping to each VM, to your router and to the internet, plus Wi-Fi or Ethernet link quality, so you can tell a slow VM from a slow network.
 - **Fleets**: several Macs report to one hub, and one window shows every Mac and its VMs. Free, with no accounts.
+- **Alerts** for risks (a disk filling up, memory short) and issues (a VM stopped, the network down), with rules you change in plain sentences, on the Mac and pushed to your iPhone. See [Alerts](#alerts).
+- **An AI agent built in**, optional and on your own model: it writes a rule from a sentence, looks into each issue and says the likely cause, and tunes rules that alert too often. See [AI built in](#ai-built-in).
 - **AI diagnosis** through a read-only MCP server: ask an agent such as Claude why a VM was slow, on this Mac or any Mac in the fleet, and it reads the history and tells you.
 - **Works with both UTM backends**: Apple Virtualization and QEMU, with macOS, Linux and Windows guests.
 
 UTM Watch is an independent project. It is not affiliated with or endorsed by the UTM project.
+
+## AI built in
+
+UTM Watch can put an AI agent to work on your VMs' history. It is optional and off by default, it runs on a model you already have, and everything else in the app works without it. Switch it on in **Alert Rules…** (right-click the menu bar item) under "AI agent".
+
+### Say what you want to be told about
+
+Type a sentence. The agent turns it into one of the alert rules, and the window replays that rule over your own last 7 days before you accept it, so you see how often it would have alerted you.
+
+![A sentence typed into the Alert rules window, and the rule the AI agent proposes for it, checked against the last 7 days](docs/images/ai-rule-from-sentence.png)
+
+### Every issue comes with a likely cause
+
+When an issue opens, the agent reads the readings around it and adds what most likely caused it, and what to do first, to the alert itself. The finding also goes into the notification, and to your iPhone if you push alerts there.
+
+<p align="center"><img src="docs/images/ai-finding.png" width="440" alt="The Alerts list with an issue the AI agent has looked into: the likely cause is written under the alert"></p>
+
+<p align="center"><sub>Example alerts. "Show on timeline" jumps the tracks to the moment an alert began.</sub></p>
+
+### Rules that tune themselves, on the model you choose
+
+Once a week the agent looks for rules that alert often for problems that end by themselves, and suggests a number that would have kept only the alerts worth an interruption. One click applies it.
+
+![The Alert rules window with a suggestion from the AI agent under a rule's 7-day chart, and the AI agent card with its choice of providers](docs/images/ai-suggestion-providers.png)
+
+**Bring your own model.** The agent runs on one of:
+
+| Runs on | What you need |
+|---|---|
+| **Claude Code** | The Claude Code already on your Mac, on the plan you have. UTM Watch finds it by itself. |
+| **Another command** | Any command that reads a question on standard input and answers on standard output, such as `ollama run`. |
+| **API key: a provider by name** | A key for Anthropic, DeepSeek, Kimi, Qwen, GLM or OpenAI, and a model name. |
+| **API key: a custom endpoint** | The address of a model on your Mac, or of any service with an OpenAI-style chat-completions API. Save your own endpoints as presets; they are kept in `ai-presets.json`, which you can also edit by hand. |
+
+**What the agent is given.** No tools: it cannot run anything or change anything on your Mac. Each question carries only what it needs. For an issue that is the alert and about two hours of readings around it, with your VMs' names and the names of the largest processes; for a rule from a sentence it is the sentence and the rules. Issues are looked into at most 20 times a day. Keys are kept on your Mac in `~/Library/Application Support/UTM Watch/keys.json`, a file only your account can read; they are not encrypted.
+
+**Prefer your own agent?** The app also ships a read-only MCP server, so Claude or another agent can read the history, the alerts and the rules itself. See [AI diagnosis with an MCP server](#ai-diagnosis-with-an-mcp-server).
 
 ## Install
 
@@ -89,7 +132,7 @@ UTM Watch tells you about **risks** (something will break if it carries on: a di
 
 Every rule is a sentence whose numbers you change in the **Alert rules** window (right-click the menu bar item). The window replays each rule over your last 7 days and says how often it would have alerted you, before you rely on it.
 
-An AI agent is optional and off by default. Switched on, it can write a rule from a sentence, look into each issue and add the likely cause to the alert, and suggest better numbers for rules that alert too often. It runs on the Claude Code already on your Mac, another command of your choice, or a model reached with your own API key (Anthropic, DeepSeek, Kimi, Qwen, GLM or OpenAI by name, or a custom endpoint: a model on your Mac or any other service with an OpenAI-style chat-completions API). Keys are kept on your Mac in `~/Library/Application Support/UTM Watch/keys.json`, a file only your account can read; they are not encrypted. An endpoint of your own can be saved as a preset; your presets are in `~/Library/Application Support/UTM Watch/ai-presets.json`, a list of `{"name", "address", "model"}` that you can also edit by hand.
+An optional AI agent can write a rule from a sentence, look into each issue and suggest better numbers for noisy rules. See [AI built in](#ai-built-in).
 
 ## AI diagnosis with an MCP server
 

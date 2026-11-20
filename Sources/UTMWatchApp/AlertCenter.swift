@@ -420,10 +420,11 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
     func showDemo() {
         demo = true
         let now = Date().msSince1970
+        let clock = DateFormatter(); clock.dateFormat = "HH:mm"
         var stop = Alert(rule: "vm_stopped", level: .issue, subject: "demo-b", vmKey: "demo-b", title: "macOS 26 B stopped",
-                         what: "It was running and stopped at 14:02 without starting again. This Mac's disk had 1.2 GB free at that moment.",
+                         what: "It was running and stopped at \(clock.string(from: Date(ms: now - 6 * 60_000))) without starting again. This Mac's disk had 1.2 GB free at that moment.",
                          todo: "Start it in UTM. If you stopped it yourself, say so and this alert goes away.", opened: now - 6 * 60_000)
-        stop.finding = "The VM wrote 24 GB between 12:00 and 14:00 while this Mac went from 31 GB to 1.2 GB free. It stopped three minutes after the Mac's disk filled, with memory and network normal, so the full disk is the likely cause. Free space on this Mac first; the other VM will hit the same wall."
+        stop.finding = "The VM wrote 24 GB in the two hours before it stopped, while this Mac went from 31 GB to 1.2 GB free. It stopped three minutes after the Mac's disk filled, with memory and network normal, so the full disk is the likely cause. Free space on this Mac first; the other VM will hit the same wall."
         stop.findingAt = now - 5 * 60_000
         let full = Alert(rule: "mac_disk_full", level: .issue, subject: "host", vmKey: nil, title: "This Mac's disk is full",
                          what: "1.2 GB free of 926 GB. VM disk images grow as the guests write; when they cannot grow, VMs pause or fail.",

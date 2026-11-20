@@ -169,6 +169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let path = value("--snapshot-alert-rules") else { return }
         let delay = value("--snapshot-delay").flatMap(Double.init) ?? 8
         if let kind = value("--alert-rule").flatMap(AlertKind.init(rawValue:)) { AlertRulesView.initialKind = kind }
+        // `--demo-proposal` shows a rule as an agent would propose it from a sentence, for pictures. Nothing is asked or saved.
+        if args.contains("--demo-proposal") {
+            AlertRulesView.demoProposal = ("Tell me if any VM uses more than 80% of its CPU for 5 minutes", AlertRule(kind: .cpu, level: .risk, value: 80, minutes: 5))
+        }
         // For this run only: the choice is not saved, so a trial copy cannot change the real setting.
         if let backend = value("--ai-backend"), ["off", "cli", "key"].contains(backend) { settings.overridesPersist = false; settings.aiBackend = backend }
         if let provider = value("--ai-provider"), AIAgent.providerIDs.contains(provider) {
@@ -225,6 +229,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let p = path("--snapshot-brief") {
             capture(BriefView(model: model, settings: settings, updater: updater, alerts: model.alerts, showsHint: true)
                 .background(Color(nsColor: .windowBackgroundColor)), to: p)
+        }
+        if let p = path("--snapshot-alerts-panel") {
+            // The Alerts list on its own, as it slides over the detail window.
+            capture(AlertsPanel(center: model.alerts, onShow: { _ in }, onRules: {}, onClose: {}).frame(height: 900), to: p)
         }
         if let p = path("--snapshot-alerts-button") {
             // The detail window's Alerts button on its own, off and on, as the toolbar shows it.
