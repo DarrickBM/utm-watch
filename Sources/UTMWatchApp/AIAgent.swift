@@ -1,6 +1,6 @@
 import Foundation
-import Security
 import UTMWatchCore
+import UTMWatchStore
 
 /// Runs a prompt through the AI agent the user chose: Claude Code (or another command) on this Mac, or a model
 /// reached with their own API key. The agent gets words in and gives words back; it is handed no tools.
@@ -21,7 +21,7 @@ final class AIAgent {
     /// Runs off the main thread and calls back on it.
     func run(_ prompt: String, completion: @escaping (Result<String, Failure>) -> Void) {
         let backend = settings.aiBackend, command = settings.aiCommand, provider = settings.aiProvider
-        let model = settings.aiModel, base = settings.aiBaseURL
+        let model = settings.aiModel, base = AIAgent.address(provider: provider, custom: settings.aiBaseURL)
         queue.async {
             let result: Result<String, Failure>
             switch backend {
@@ -129,22 +129,43 @@ final class AIAgent {
         let model: String
     }
 
-    /// Addresses and model names as the services' documentation gave them in November 2026. They are only a start:
-    /// both fields stay editable, and accounts outside mainland China may need the service's international address.
-    static let presets: [Preset] = [
+    /// Services offered by name in the Provider choice. Each speaks the OpenAI-style chat-completions API at an
+    /// address of its own; the user gives only a key and a model. Addresses and model names are as the services'
+    /// documentation gave them in November 2026; accounts outside mainland China may need a service's international
+    /// address, which goes under "Custom endpoint".
+    static let providers: [Preset] = [
         Preset(id: "deepseek", name: "DeepSeek", address: "https://api.deepseek.com", model: "deepseek-flash"),
         Preset(id: "kimi", name: "Kimi", address: "https://api.moonshot.cn/v1", model: "kimi-k3.1-pro"),
         Preset(id: "qwen", name: "Qwen", address: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen3.7-plus"),
         Preset(id: "glm", name: "GLM", address: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3"),
         Preset(id: "openai", name: "OpenAI", address: "https://api.openai.com/v1", model: ""),
+    ]
+
+    /// The one address built into "Custom endpoint"; the rest there are the user's own saved presets.
+    static let presets: [Preset] = [
         Preset(id: "local", name: "On this Mac", address: "http://localhost:11434/v1", model: "qwen3:8b"),
     ]
 
-    /// Where a key is kept in the Keychain. Each custom endpoint has a key of its own, by host, so a key entered for
+    static let anthropic = "anthropic", custom = "custom"
+    static var providerIDs: [String] { [anthropic] + providers.map(\.id) + [custom] }
+
+    /// The address a provider is reached at: its own for a named one, what the user typed for a custom endpoint.
+    static func address(provider: String, custom typed: String) -> String {
+        providers.first { $0.id == provider }?.address ?? typed
+    }
+
+    /// The model a provider starts with when the user has not chosen one for it.
+    static func defaultModel(provider: String, custom typed: String) -> String {
+        if provider == anthropic { return "claude-haiku-5-5" }
+        if let named = providers.first(where: { $0.id == provider }) { return named.model }
+        return presets.first { chatURL(from: $0.address) == chatURL(from: typed) }?.model ?? ""
+    }
+
+    /// The name a key is kept under in the keys file. Each custom endpoint has a key of its own, by host, so a key entered for
     /// one service is never sent to another when the address changes.
     static func keyAccount(provider: String, baseURL: String) -> String {
-        guard provider != "anthropic" else { return "anthropic" }
-        let url = chatURL(from: baseURL)
+        guard provider != anthropic else { return anthropic }
+        let url = chatURL(from: address(provider: provider, custom: baseURL))
         return "custom:" + (url?.host ?? "") + (url?.port.map { ":\($0)" } ?? "")
     }
 
@@ -160,7 +181,7 @@ final class AIAgent {
 
     private static func runAPI(_ prompt: String, provider: String, model: String, baseURL: String) -> Result<String, Failure> {
         // Debug aid: `UTMWATCH_AI_KEY` supplies the key for one run, so a trial copy can be tested without saving a key.
-        let key = ProcessInfo.processInfo.environment["UTMWATCH_AI_KEY"] ?? Keychain.get(keyAccount(provider: provider, baseURL: baseURL)) ?? ""
+        let key = ProcessInfo.processInfo.environment["UTMWATCH_AI_KEY"] ?? KeysFile.get(keyAccount(provider: provider, baseURL: baseURL)) ?? ""
         let model = model.trimmingCharacters(in: .whitespaces)
         guard !model.isEmpty else { return .failure(Failure(message: "No model name is set.")) }
         var request: URLRequest
@@ -212,28 +233,5 @@ final class AIAgent {
         }.resume()
         done.wait()
         return result
-    }
-}
-
-/// API keys are kept in the macOS Keychain, never in the app's settings.
-enum Keychain {
-    private static let service = "com.darrick.utmwatch.ai"
-
-    static func get(_ account: String) -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account,
-                                    kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    /// Saves the key; an empty one removes it. Returns false when the Keychain refused.
-    @discardableResult static func set(_ value: String, for account: String) -> Bool {
-        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
-        SecItemDelete(base as CFDictionary)
-        guard !value.isEmpty else { return true }
-        var add = base
-        add[kSecValueData as String] = Data(value.utf8)
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 }

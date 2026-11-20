@@ -384,7 +384,7 @@ func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
         _ = try openStore() // the same permission check as every other tool
         let names = Dictionary(((try? openStore())?.knownVMs() ?? []).map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
         return ["rules": AlertRulesFile.load().map { r -> [String: Any] in
-            var d: [String: Any] = ["kind": r.kind.rawValue, "sentence": r.sentence, "level": r.level.rawValue, "minutes": r.minutes, "on": r.enabled,
+            var d: [String: Any] = ["kind": r.kind.rawValue, "sentence": r.sentence, "level": r.level.rawValue, "minutes": r.minutes, "on": r.enabled, "pushesToPhone": r.phone,
                                     "appliesTo": r.kind.spec.scope]
             if let v = r.value { d["value"] = v; d["unit"] = r.kind.spec.unit.trimmingCharacters(in: .whitespaces) }
             if !r.excluded.isEmpty { d["leavesOut"] = r.excluded.map { names[$0] ?? $0 } }

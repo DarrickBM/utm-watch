@@ -71,7 +71,9 @@ public enum AlertReplay {
                 return AlertSample.VM(key: key, name: name, running: true, cpu: p.cpu, cores: h.config(for: key, at: p.t)?.cores, mem: p.mem,
                                       net: p.down == nil && p.up == nil ? nil : (p.down ?? 0) + (p.up ?? 0), diskUsed: p.diskUsed, diskSize: p.diskSize)
             }
-            tl.samples.append(AlertSample(t: hp.t, vms: vms, pressure: hp.pressure, diskFree: hp.diskFree, diskTotal: hp.diskTotal, averaged: true))
+            var sample = AlertSample(t: hp.t, vms: vms, pressure: hp.pressure, diskFree: hp.diskFree, diskTotal: hp.diskTotal, averaged: true)
+            sample.memUsed = hp.used; sample.swapUsed = hp.swapUsed; sample.swapTotal = hp.swapTotal
+            tl.samples.append(sample)
         }
         var probeSlots: [Int64: AlertProbe] = [:]
         for l in h.link { probeSlots[slot(l.t)] = AlertProbe(t: l.t, linkKind: l.kind, rssi: l.rssi) }

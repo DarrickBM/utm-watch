@@ -1,6 +1,7 @@
 import Foundation
 import ServiceManagement
 import UTMWatchCore
+import UTMWatchStore
 
 /// User preferences, persisted in UserDefaults.
 final class AppSettings: ObservableObject {
@@ -41,17 +42,29 @@ final class AppSettings: ObservableObject {
     @Published var notifyIssues: Bool { didSet { defaults.set(notifyIssues, forKey: "notifyIssues") } }
     @Published var notifyRisks: Bool { didSet { defaults.set(notifyRisks, forKey: "notifyRisks") } }
     /// Alerts: where the AI agent runs. "off", "cli" (Claude Code or another command on this Mac) or "key" (an API key).
-    @Published var aiBackend: String { didSet { if aiChoicePersists { defaults.set(aiBackend, forKey: "aiBackend") } } }
-    /// False while a debug flag overrides the agent choice for one run: the override must never become the saved setting.
-    var aiChoicePersists = true
+    @Published var aiBackend: String { didSet { if overridesPersist { defaults.set(aiBackend, forKey: "aiBackend") } } }
+    /// False while a debug flag overrides a choice for one run: the override must never become the saved setting.
+    var overridesPersist = true
     /// A command to run instead of Claude Code; it gets the prompt on standard input and answers on standard output.
-    @Published var aiCommand: String { didSet { if aiChoicePersists { defaults.set(aiCommand, forKey: "aiCommand") } } }
-    /// "anthropic" or "openai" (any server that speaks the OpenAI chat API, including one on this Mac).
-    @Published var aiProvider: String { didSet { if aiChoicePersists { defaults.set(aiProvider, forKey: "aiProvider") } } }
-    @Published var aiModel: String { didSet { if aiChoicePersists { defaults.set(aiModel, forKey: "aiModel") } } }
-    @Published var aiBaseURL: String { didSet { if aiChoicePersists { defaults.set(aiBaseURL, forKey: "aiBaseURL") } } }
+    @Published var aiCommand: String { didSet { if overridesPersist { defaults.set(aiCommand, forKey: "aiCommand") } } }
+    /// "anthropic", a named service ("deepseek", "kimi", "qwen", "glm", "openai") or "custom" (an address the user gives:
+    /// any server that speaks the OpenAI chat API, including one on this Mac).
+    @Published var aiProvider: String { didSet { if overridesPersist { defaults.set(aiProvider, forKey: "aiProvider") } } }
+    /// The model last used with each provider, so switching provider and back keeps what was typed.
+    @Published var aiModels: [String: String] { didSet { if overridesPersist { defaults.set(aiModels, forKey: "aiModels") } } }
+    @Published var aiModel: String { didSet { if overridesPersist { defaults.set(aiModel, forKey: "aiModel") } } }
+    @Published var aiBaseURL: String { didSet { if overridesPersist { defaults.set(aiBaseURL, forKey: "aiBaseURL") } } }
     @Published var aiInvestigate: Bool { didSet { defaults.set(aiInvestigate, forKey: "aiInvestigate") } }
     @Published var aiSuggest: Bool { didSet { defaults.set(aiSuggest, forKey: "aiSuggest") } }
+    /// Alerts: also push them to an iPhone through Bark. The device key is in the keys file.
+    @Published var barkOn: Bool { didSet { if overridesPersist { defaults.set(barkOn, forKey: "barkOn") } } }
+    @Published var barkServer: String { didSet { if overridesPersist { defaults.set(barkServer, forKey: "barkServer") } } }
+    /// Issues are sent as time-sensitive, so they show while a Focus is on.
+    @Published var barkUrgentIssues: Bool { didSet { defaults.set(barkUrgentIssues, forKey: "barkUrgentIssues") } }
+    /// One more push when an alert ends.
+    @Published var barkEnded: Bool { didSet { defaults.set(barkEnded, forKey: "barkEnded") } }
+    /// The push is updated with the AI agent's finding once it is ready.
+    @Published var barkFinding: Bool { didSet { defaults.set(barkFinding, forKey: "barkFinding") } }
     @Published var launchAtLogin: Bool
     @Published var launchAtLoginError: String?
 
@@ -60,7 +73,8 @@ final class AppSettings: ObservableObject {
                                      "allowAgents": true, "captureProcesses": true, "checkForUpdates": true, "showOtherVMs": true,
                                      "hubPort": 8787, "fleetAlerts": true, "hiddenTracks": [TrackKind.swap.rawValue],
                                      "notifyIssues": true, "notifyRisks": true, "aiBackend": "off", "aiProvider": "anthropic",
-                                     "aiModel": "claude-haiku-5-5", "aiBaseURL": "https://api.deepseek.com", "aiInvestigate": true, "aiSuggest": true])
+                                     "aiModel": "claude-haiku-5-5", "aiBaseURL": "https://api.deepseek.com", "aiInvestigate": true, "aiSuggest": true,
+                                     "barkOn": false, "barkServer": BarkPush.defaultServer, "barkUrgentIssues": true, "barkEnded": false, "barkFinding": true])
         let interval = defaults.integer(forKey: "sampleInterval")
         sampleInterval = [1, 2, 5].contains(interval) ? interval : 2
         rateUnits = RateUnits(rawValue: defaults.string(forKey: "rateUnits") ?? "") ?? .bytes
@@ -82,11 +96,28 @@ final class AppSettings: ObservableObject {
         let backend = defaults.string(forKey: "aiBackend") ?? "off"
         aiBackend = ["off", "cli", "key"].contains(backend) ? backend : "off"
         aiCommand = defaults.string(forKey: "aiCommand") ?? ""
-        aiProvider = defaults.string(forKey: "aiProvider") == "openai" ? "openai" : "anthropic"
+        // Before services were offered by name, "openai" meant any address the user gave. Such a setting becomes the
+        // named service whose address it holds, or a custom endpoint.
+        var provider = defaults.string(forKey: "aiProvider") ?? AIAgent.anthropic
+        if !defaults.bool(forKey: "aiProviderNamed") {
+            if provider == "openai" {
+                let host = AIPreset.host(of: defaults.string(forKey: "aiBaseURL") ?? "")
+                provider = AIAgent.providers.first { AIPreset.host(of: $0.address) == host }?.id ?? AIAgent.custom
+                defaults.set(provider, forKey: "aiProvider")
+            }
+            defaults.set(true, forKey: "aiProviderNamed")
+        }
+        aiProvider = AIAgent.providerIDs.contains(provider) ? provider : AIAgent.anthropic
+        aiModels = defaults.dictionary(forKey: "aiModels") as? [String: String] ?? [:]
         aiModel = defaults.string(forKey: "aiModel") ?? "claude-haiku-5-5"
         aiBaseURL = defaults.string(forKey: "aiBaseURL") ?? "https://api.deepseek.com"
         aiInvestigate = defaults.bool(forKey: "aiInvestigate")
         aiSuggest = defaults.bool(forKey: "aiSuggest")
+        barkOn = defaults.bool(forKey: "barkOn")
+        barkServer = defaults.string(forKey: "barkServer") ?? BarkPush.defaultServer
+        barkUrgentIssues = defaults.bool(forKey: "barkUrgentIssues")
+        barkEnded = defaults.bool(forKey: "barkEnded")
+        barkFinding = defaults.bool(forKey: "barkFinding")
         launchAtLogin = SMAppService.mainApp.status == .enabled
         // Written explicitly so the helper, a separate process, sees the value even before it is ever toggled.
         defaults.set(allowAgents, forKey: "allowAgents")

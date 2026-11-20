@@ -64,6 +64,11 @@ public struct AlertSample {
     public var pressure: Int
     public var diskFree: Double?
     public var diskTotal: Double?
+    /// The Mac's memory in use and its size, and its swap space in use and its size, in bytes; nil when not known.
+    public var memUsed: Double?
+    public var memTotal: Double?
+    public var swapUsed: Double?
+    public var swapTotal: Double?
     /// True when the readings are already averages over a minute (replayed history), so the engine does not average again.
     public var averaged = false
 
@@ -82,6 +87,10 @@ public struct AlertSample {
         pressure = HostPoint.code(s.host.pressure)
         diskFree = s.host.diskFreeBytes.map { Double($0) }
         diskTotal = s.host.diskTotalBytes.map { Double($0) }
+        memUsed = Double(s.host.hostUsed)
+        memTotal = s.host.totalMemory > 0 ? Double(s.host.totalMemory) : nil
+        swapUsed = Double(s.host.swapUsed)
+        swapTotal = Double(s.host.swapTotal)
     }
 }
 
@@ -293,11 +302,21 @@ public struct AlertEngine {
                 }
             case .memory, .memoryCritical:
                 let critical = rule.kind == .memoryCritical
+                // The figures behind macOS's verdict: it is about the whole Mac, which the VMs' own readings do not show.
+                // Whole gigabytes for memory, so the wording does not change with every sample.
+                var figures: [String] = []
+                if let used = s.memUsed, used > 0 {
+                    figures.append("\(Int((used / 1_073_741_824).rounded()))" + (s.memTotal.map { " of \(Int(($0 / 1_073_741_824).rounded()))" } ?? "") + " GB of this Mac's memory in use")
+                }
+                if let swap = s.swapUsed, let total = s.swapTotal, total > 0 {
+                    figures.append("swap \(Int((swap / total * 100).rounded()))% full (\(AlertEngine.gb(swap)) of \(AlertEngine.gb(total)) GB)")
+                }
+                let facts = figures.isEmpty ? "" : " " + figures.joined(separator: ", ").prefix(1).uppercased() + figures.joined(separator: ", ").dropFirst() + "."
                 step(rule, Alert.host, nil, s.t, bad: s.pressure >= (critical ? 2 : 1), hold: hold, clear: hold, out: &out) { _ in
                     critical
-                        ? ("Memory is critically short", "Memory pressure is at Critical. macOS is nearly out of memory and is swapping heavily; expect stalls.",
+                        ? ("Memory is critically short", "Memory pressure is at Critical.\(facts) macOS is nearly out of memory and is swapping heavily; expect stalls.",
                            "Shut down a VM or quit large apps now.")
-                        : ("Memory is short", "Memory pressure has stayed at Warning. macOS is compressing and swapping to keep up, so VMs and apps may feel slow.",
+                        : ("Memory is short", "Memory pressure has stayed at Warning.\(facts) macOS is compressing and swapping to keep up, so VMs and apps may feel slow.",
                            "Close apps or shut down a VM, or give the VMs less memory.")
                 }
             case .unusual:

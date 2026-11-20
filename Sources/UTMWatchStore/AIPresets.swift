@@ -1,7 +1,7 @@
 import Foundation
 
 /// A chat-completions service the user saved under a name of their own: where it is, and which model to ask for.
-/// The key is not part of it; keys stay in the Keychain.
+/// The key is not part of it; keys are kept apart, in the keys file.
 public struct AIPreset: Codable, Equatable {
     public var name: String
     public var address: String

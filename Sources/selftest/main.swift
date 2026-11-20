@@ -709,8 +709,13 @@ do {
     check(memChanges.isEmpty, "five minutes before a sleep and five after are not ten minutes of pressure")
     for sec in stride(from: 3902, through: 4300, by: 2) { memChanges += m.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [], pressure: 1)) }
     check(opened(memChanges).count == 1 && opened(memChanges).first?.title == "Memory is short", "ten unbroken minutes of memory pressure is a risk")
-    check(closed(m.mute("memory|host", until: t0 + 6000_000, at: t0 + 4300_000)) == ["memory|host"], "muting closes the alert")
-    for sec in stride(from: 4302, through: 5900, by: 2) { memChanges = m.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [], pressure: 1)); if !memChanges.isEmpty { break } }
+    var figures = AlertSample(t: t0 + 4400_000, vms: [], pressure: 1)
+    figures.memUsed = 40.4 * gbd; figures.memTotal = 48 * gbd; figures.swapUsed = 5.6 * gbd; figures.swapTotal = 7 * gbd
+    let updated = m.ingest(figures).compactMap { c -> Alert? in if case .updated(let a) = c { return a } else { return nil } }
+    check(updated.first?.what == "Memory pressure has stayed at Warning. 40 of 48 GB of this Mac's memory in use, swap 80% full (5.6 of 7.0 GB). macOS is compressing and swapping to keep up, so VMs and apps may feel slow.",
+          "the memory alert carries the Mac's memory and swap figures")
+    check(closed(m.mute("memory|host", until: t0 + 6000_000, at: t0 + 4400_000)) == ["memory|host"], "muting closes the alert")
+    for sec in stride(from: 4402, through: 5900, by: 2) { memChanges = m.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [], pressure: 1)); if !memChanges.isEmpty { break } }
     check(memChanges.isEmpty && m.open.isEmpty, "and keeps it quiet until the mute ends")
 
     // The network.
@@ -858,7 +863,7 @@ do {
     check(AlertAI.rule(from: "Here you go:\n```json\n{\"kind\": \"cpu\", \"value\": 80, \"minutes\": 5, \"level\": \"risk\"}\n```", current: rules)
             == .rule(AlertRule(kind: .cpu, level: .risk, value: 80, minutes: 5)), "a rule is read from the agent's JSON, fences and all")
     check(AlertAI.rule(from: "{\"kind\":\"mac_disk\",\"value\":9000,\"minutes\":1000,\"level\":\"issue\"}", current: rules)
-            == .rule(AlertRule(kind: .macDisk, level: .issue, value: 200, minutes: 1440)), "numbers outside a rule's limits are brought inside them")
+            == .rule(AlertRule(kind: .macDisk, level: .issue, value: 200, minutes: 1440, phone: false)), "numbers outside a rule's limits are brought inside them, and the rule keeps its phone choice")
     check(AlertAI.rule(from: "{\"error\": \"The rules cannot watch battery level.\"}", current: rules) == .cannot("The rules cannot watch battery level."), "the agent can say a request fits no rule")
     if case .cannot = AlertAI.rule(from: "I am not sure.", current: rules) {} else { check(false, "an answer with no rule in it is refused") }
     if case .cannot = AlertAI.rule(from: "{\"kind\":\"rm -rf\"}", current: rules) {} else { check(false, "an unknown kind is refused") }
@@ -876,6 +881,54 @@ do {
     let loaded = AlertRulesFile.load(path: rulesPath)
     check(loaded.count == AlertKind.allCases.count && loaded.first?.value == 70 && loaded.first?.minutes == 10, "an unknown rule in the file is skipped and missing fields take the defaults")
     check(AlertRulesFile.load(path: dir + "/missing.json") == AlertRule.defaults, "no rules file means the default rules")
+    // Which rules push to the phone, and the push itself.
+    check(AlertKind.vmStopped.spec.rule.phone && !AlertKind.cpu.spec.rule.phone && AlertRule.defaults.filter(\.phone).count == AlertRule.defaults.filter { $0.level == .issue }.count,
+          "issues push to the phone to begin with, risks do not")
+    try? Data(#"[{"kind":"cpu","phone":true},{"kind":"vm_stopped","phone":false},{"kind":"memory","level":"issue"}]"#.utf8).write(to: URL(fileURLWithPath: rulesPath))
+    let phones = AlertRulesFile.load(path: rulesPath)
+    check(phones.first { $0.kind == .cpu }?.phone == true && phones.first { $0.kind == .vmStopped }?.phone == false && phones.first { $0.kind == .memory }?.phone == true && phones.first { $0.kind == .wifi }?.phone == false,
+          "the phone choice is kept per rule; a rule without one follows its level")
+    check(BarkPush.parse(" AbCd1234 ").key == "AbCd1234" && BarkPush.parse("AbCd1234").server == nil, "a bare device key is taken as it is")
+    let pasted = BarkPush.parse("https://bark.example.com:8443/AbCd1234/Title/Body?sound=bell")
+    check(pasted.server == "https://bark.example.com:8443" && pasted.key == "AbCd1234", "the whole address Bark shows gives the server and the key")
+    let under = BarkPush.parse("https://home.example/bark/kUyfVfsNgQmzbcBe3XPZMf/Title/Body")
+    check(under.server == "https://home.example/bark" && under.key == "kUyfVfsNgQmzbcBe3XPZMf", "a server under a path of its own keeps that path")
+    let spaced = BarkPush.parse("https://api.day.app/kUyfVfsNgQmzbcBe3XPZMf/这里改成 你自己的推送内容")
+    check(spaced.server == "https://api.day.app" && spaced.key == "kUyfVfsNgQmzbcBe3XPZMf", "an address with words a URL may not hold is still read")
+    check(BarkPush.parse("ftp://x.example/abc").key == "" && BarkPush.parse("https://").key == "", "an address that cannot be read gives no key, not the address as a key")
+    check(BarkPush.request(server: "https://home.example/bark", key: "k", message: .init(title: "t", body: "b"))?.url.absoluteString == "https://home.example/bark/push", "pushes to a server under a path go under that path")
+    if let r = BarkPush.request(server: "https://api.day.app/", key: "AbCd1234", message: .init(title: "Issue: macOS 26 stopped", body: "It stopped.", level: .timeSensitive, id: "utmwatch-0a1b2c3d")),
+       let sent = try? JSONSerialization.jsonObject(with: r.body) as? [String: String] {
+        check(r.url.absoluteString == "https://api.day.app/push" && sent == ["device_key": "AbCd1234", "title": "Issue: macOS 26 stopped", "body": "It stopped.", "group": "UTM Watch", "level": "timeSensitive", "id": "utmwatch-0a1b2c3d"],
+              "a push is a POST to /push with the key, the alert and its level")
+    } else { check(false, "a push request can be made") }
+    check(BarkPush.request(server: "", key: "k", message: .init(title: "t", body: "b"))?.url.absoluteString == "https://api.day.app/push"
+            && BarkPush.request(server: "nonsense", key: "k", message: .init(title: "t", body: "b")) == nil
+            && BarkPush.request(server: "https://api.day.app", key: " ", message: .init(title: "t", body: "b")) == nil,
+          "no server means Bark's own; no key or an unusable server means no push")
+    check(BarkPush.failure(status: 200, body: Data(#"{"code":200,"message":"success"}"#.utf8)) == nil
+            && BarkPush.failure(status: 400, body: Data(#"{"code":400,"message":"failed to get device token: failed to get [x] device token from database"}"#.utf8))?.contains("device token") == true
+            && BarkPush.failure(status: 502, body: nil) == "The Bark server answered HTTP 502.",
+          "the server's answer says whether the push was taken, and why not")
+    check(BarkPush.failure(status: 200, body: Data("<html>Router</html>".utf8)) == "The server at that address did not answer like a Bark server."
+            && BarkPush.failure(status: 200, body: Data(#"{"ok":true}"#.utf8)) != nil, "a friendly reply from something that is not a Bark server is not a delivered push")
+    check(BarkPush.worthRetrying(status: 0) && BarkPush.worthRetrying(status: 503) && BarkPush.worthRetrying(status: 429) && !BarkPush.worthRetrying(status: 400) && !BarkPush.worthRetrying(status: 200),
+          "a push is tried again after no answer or a server fault, not after a refusal")
+    check(BarkPush.request(server: "", key: "k", message: .init(title: "t", body: "b", level: .passive)).flatMap { try? JSONSerialization.jsonObject(with: $0.body) as? [String: String] }?["level"] == "passive",
+          "an update to a push already seen is sent quietly")
+
+    // Keys, in a file only the user's account can read.
+    let keysPath = dir + "/keys.json"
+    check(KeysFile.get("bark", path: keysPath) == nil, "no keys file means no key")
+    check(KeysFile.set("sk-one", for: "custom:llm.example", path: keysPath) && KeysFile.set("device", for: "bark", path: keysPath)
+            && KeysFile.get("custom:llm.example", path: keysPath) == "sk-one" && KeysFile.get("bark", path: keysPath) == "device", "keys are kept per account")
+    let mode = ((try? FileManager.default.attributesOfItem(atPath: keysPath))?[.posixPermissions] as? NSNumber)?.intValue
+    check(mode == 0o600, "the keys file is readable and writable by its owner only")
+    check(KeysFile.set("", for: "bark", path: keysPath) && KeysFile.get("bark", path: keysPath) == nil && KeysFile.get("custom:llm.example", path: keysPath) == "sk-one",
+          "saving an empty key removes that one and leaves the others")
+    try? Data("not json".utf8).write(to: URL(fileURLWithPath: keysPath))
+    check(KeysFile.get("bark", path: keysPath) == nil && KeysFile.set("k", for: "bark", path: keysPath) && KeysFile.get("bark", path: keysPath) == "k", "an unreadable keys file is started afresh")
+
     // The user's own endpoint presets, in a file that can be edited by hand.
     let presetsPath = dir + "/ai-presets.json"
     check(AIPresetsFile.load(path: presetsPath).isEmpty && AIPresetsFile.modified(path: presetsPath) == nil, "no presets file means no saved presets")

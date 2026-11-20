@@ -77,6 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.onOpenAlertRules = { [weak self] in self?.showAlertRules() }
         // Debug aid: `--demo-alerts` shows example alerts on every surface. Nothing is stored or sent.
         if CommandLine.arguments.contains("--demo-alerts") { model.alerts.showDemo() }
+        // Debug aid: `--bark-server <address>` pushes this run's alerts there, without saving the choice. The saved device key
+        // is never read in such a run: the key comes from `UTMWATCH_BARK_KEY` or from what is typed into the window.
+        if let i = CommandLine.arguments.firstIndex(of: "--bark-server"), i + 1 < CommandLine.arguments.count {
+            BarkSender.redirected = true; settings.overridesPersist = false; settings.barkOn = true; settings.barkServer = CommandLine.arguments[i + 1]
+        }
         // A click on a notification opens the detail window at the moment the alert began.
         model.alerts.onShow = { [weak self] ms in
             self?.showDetails()
@@ -165,12 +170,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let delay = value("--snapshot-delay").flatMap(Double.init) ?? 8
         if let kind = value("--alert-rule").flatMap(AlertKind.init(rawValue:)) { AlertRulesView.initialKind = kind }
         // For this run only: the choice is not saved, so a trial copy cannot change the real setting.
-        if let backend = value("--ai-backend"), ["off", "cli", "key"].contains(backend) { settings.aiChoicePersists = false; settings.aiBackend = backend }
-        if let provider = value("--ai-provider"), ["anthropic", "openai"].contains(provider) { settings.aiChoicePersists = false; settings.aiProvider = provider }
+        if let backend = value("--ai-backend"), ["off", "cli", "key"].contains(backend) { settings.overridesPersist = false; settings.aiBackend = backend }
+        if let provider = value("--ai-provider"), AIAgent.providerIDs.contains(provider) {
+            settings.overridesPersist = false; settings.aiProvider = provider
+            settings.aiModel = AIAgent.defaultModel(provider: provider, custom: settings.aiBaseURL)
+        }
         if let endpoint = value("--ai-endpoint") {
-            settings.aiChoicePersists = false
+            settings.overridesPersist = false
+            settings.aiProvider = AIAgent.custom
             settings.aiBaseURL = endpoint; settings.aiModel = value("--ai-model") ?? settings.aiModel
         }
+        // `--bark-server <address>` shows the Phone card set up, for this run only.
+        if let server = value("--bark-server") { BarkSender.redirected = true; settings.overridesPersist = false; settings.barkOn = true; settings.barkServer = server }
         showAlertRules()
         if let k = args.firstIndex(of: "--snapshot-size"), k + 2 < args.count, let w = Double(args[k + 1]), let h = Double(args[k + 2]) {
             alertRulesWindow?.setContentSize(NSSize(width: w, height: h))
@@ -215,6 +226,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             capture(BriefView(model: model, settings: settings, updater: updater, alerts: model.alerts, showsHint: true)
                 .background(Color(nsColor: .windowBackgroundColor)), to: p)
         }
+        if let p = path("--snapshot-alerts-button") {
+            // The detail window's Alerts button on its own, off and on, as the toolbar shows it.
+            capture(HStack(spacing: 16) {
+                AlertsButton(center: model.alerts, isOn: false) {}
+                AlertsButton(center: model.alerts, isOn: true) {}
+            }.padding(14).background(Color(nsColor: .windowBackgroundColor)), to: p)
+        }
         if let p = path("--snapshot-icons") {
             // The menu bar item's three states, on a light and a dark menu bar.
             let row = { (dark: Bool) in
@@ -235,11 +253,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if let p = path("--ai-check") {
             // Debug aid: one real request of each kind through Claude Code, written to a file. For this run only: nothing is saved.
-            settings.aiChoicePersists = false
+            settings.overridesPersist = false
             settings.aiBackend = "cli"; settings.aiCommand = path("--ai-command") ?? ""
             // `--ai-endpoint <address> --ai-model <name>` sends the same two requests to a chat-completions server instead.
             if let endpoint = path("--ai-endpoint") {
-                settings.aiBackend = "key"; settings.aiProvider = "openai"; settings.aiBaseURL = endpoint
+                settings.aiBackend = "key"; settings.aiProvider = AIAgent.custom; settings.aiBaseURL = endpoint
                 settings.aiModel = path("--ai-model") ?? "test-model"
             }
             let center = model.alerts

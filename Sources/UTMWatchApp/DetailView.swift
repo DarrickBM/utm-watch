@@ -391,7 +391,7 @@ struct DetailView: View {
     }
 }
 
-/// The toolbar's Alerts button: a bell, and how many alerts are open in the colour of the worst one.
+/// The toolbar's Alerts button: a bell, then a dot in the colour of the worst open alert and how many are open.
 struct AlertsButton: View {
     @ObservedObject var center: AlertCenter
     let isOn: Bool
@@ -402,11 +402,11 @@ struct AlertsButton: View {
             HStack(spacing: 6) {
                 Image(systemName: "bell")
                 Text("Alerts")
+                // A small dot in the colour of the worst open alert, then the count in quiet text: enough to notice,
+                // without a filled disc shouting from the toolbar.
                 if !center.open.isEmpty, let level = center.level {
-                    Text("\(center.open.count)").font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                        .foregroundStyle(level == .issue ? Color.white : Color.black)
-                        .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 18)
-                        .background(Capsule().fill(AlertStyle.color(level)))
+                    Circle().fill(AlertStyle.color(level)).frame(width: 7, height: 7).padding(.leading, 1)
+                    Text("\(center.open.count)").monospacedDigit().foregroundStyle(.secondary)
                 }
             }
         }

@@ -32,6 +32,8 @@ An alert is one problem from when it began until it is over, not one reading. Ea
 - Time the Mac spends asleep does not count towards a rule's time.
 - The count beside each rule in the Alert rules window comes from running the same rule over your last 7 days of history. A rule about something that was not recorded then (the Mac's free disk space before this version) says "no data" and is still watched from now on.
 
+Pushing to a phone is off until you set it up in the Alert rules window. It uses Bark, an iPhone and iPad app; the alert's title and text are sent to the Bark server you name (Bark's own by default) and from there through Apple's push service. Only rules whose "Phone" switch is on are pushed.
+
 The AI agent is off unless you choose one in the Alert rules window. It is sent the alert and about two hours of readings around it, with your VMs' names and the names of the largest processes, and nothing else; it is given no tools. With "Claude Code" this goes to the Claude Code already on this Mac; with "API key" it goes to the provider whose key you entered.
 
 ## How VMs are identified

@@ -35,6 +35,7 @@ struct AlertRulesView: View {
                             AIAgentCard(settings: settings, agent: center.agent)
                             notificationsCard
                         }
+                        PhoneCard(settings: settings, center: center)
                     }
                     .padding(.bottom, 4)
                 }
@@ -123,7 +124,12 @@ struct AlertRulesView: View {
                                 Text(r.sentence).foregroundStyle(r.enabled ? Color.primary : Color.secondary)
                                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                                 Spacer(minLength: 6)
-                                Text(countText(r)).font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit().fixedSize()
+                                if settings.barkOn, r.enabled, r.phone {
+                                    Image(systemName: "iphone").font(.system(size: 11)).foregroundStyle(.secondary)
+                                        .help("Alerts from this rule are pushed to your phone").accessibilityLabel("Pushed to your phone")
+                                }
+                                Text(countText(r)).font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
+                                    .frame(minWidth: 34, alignment: .trailing).fixedSize()
                             }
                             .padding(.horizontal, 12).frame(minHeight: 44).contentShape(Rectangle())
                             .background(r.kind == selected ? Color.primary.opacity(0.08) : Color.clear)
@@ -204,6 +210,10 @@ struct AlertRulesView: View {
                 }
                 Text(closesText(r)).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
+                Toggle("Phone", isOn: Binding(get: { r.phone }, set: { on in var n = r; n.phone = on; change(n) }))
+                    .toggleStyle(.switch).controlSize(.small)
+                    .help(settings.barkOn ? "Also push this rule's alerts to your phone" : "Also push this rule's alerts to your phone. Set the phone up in the Phone card below first.")
+                    .accessibilityLabel("Push this rule's alerts to my phone")
                 Toggle("On", isOn: Binding(get: { r.enabled }, set: { on in var n = r; n.enabled = on; change(n) }))
                     .toggleStyle(.switch).controlSize(.small)
                     .accessibilityLabel("Rule is on")
@@ -435,6 +445,10 @@ struct AIAgentCard: View {
     let agent: AIAgent
 
     @StateObject private var saved = AIPresetList()
+    @State private var storedKey = ""
+    /// The account the key field was last filled from, so typing in the address reloads it only when the host changes.
+    @State private var loadedAccount = ""
+    @State private var keySaver = KeySaver()
     @State private var namingPreset = false
     @State private var presetName = ""
     @State private var claudePath: String? = AIAgent.findClaude()
@@ -487,10 +501,10 @@ struct AIAgentCard: View {
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .onAppear { key = Keychain.get(keyAccount) ?? ""; saved.watch(true) }
-        .onDisappear { saved.watch(false) }
+        .onAppear { loadKey(); saved.watch(true) }
+        .onDisappear { keySaver.flush(); saved.watch(false) }
         .onChange(of: settings.aiBackend) { testResult = nil; claudePath = AIAgent.findClaude() }
-        .onChange(of: settings.aiProvider) { testResult = nil; key = Keychain.get(keyAccount) ?? "" }
+        .onChange(of: settings.aiProvider) { testResult = nil; loadKey() }
     }
 
     private func status(_ ok: Bool, _ strong: String, _ rest: String) -> some View {
@@ -542,14 +556,24 @@ struct AIAgentCard: View {
 
     private var keyBox: some View {
         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
-            GridRow {
-                Text("Provider").foregroundStyle(.secondary)
-                Picker("Provider", selection: $settings.aiProvider) {
-                    Text("Anthropic").tag("anthropic"); Text("Custom endpoint").tag("openai")
+            GridRow(alignment: .top) {
+                Text("Provider").foregroundStyle(.secondary).padding(.top, 4)
+                FlowLayout(spacing: 5) {
+                    providerChip(AIAgent.anthropic, "Anthropic")
+                    ForEach(AIAgent.providers) { providerChip($0.id, $0.name) }
+                    providerChip(AIAgent.custom, "Custom endpoint")
                 }
-                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .accessibilityElement(children: .contain).accessibilityLabel("Provider")
             }
-            if settings.aiProvider == "openai" {
+            if let named = AIAgent.providers.first(where: { $0.id == settings.aiProvider }) {
+                GridRow {
+                    Text("Address").foregroundStyle(.secondary)
+                    (Text(named.address.replacingOccurrences(of: "https://", with: "")) + Text("  · set by the provider").foregroundColor(Color.secondary.opacity(0.7)))
+                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        .help("\(named.name)'s own address. For another address, such as its international one, use Custom endpoint.")
+                }
+            }
+            if settings.aiProvider == AIAgent.custom {
                 GridRow(alignment: .top) {
                     Text("Address").foregroundStyle(.secondary).padding(.top, 4)
                     VStack(alignment: .leading, spacing: 6) {
@@ -592,14 +616,14 @@ struct AIAgentCard: View {
                                 Text("That is the name of a built-in preset; choose another.").foregroundStyle(.secondary)
                             }
                         }
-                        Text("Any service that speaks the OpenAI chat-completions API. Pick one to fill in its address and model, or type your own and save it as a preset. The × on one of yours removes it and forgets its key; the built-in ones stay.")
+                        Text("For a model on this Mac or any other service that speaks the OpenAI chat-completions API. Type its address and save it as a preset of your own. The × on one of yours removes it and forgets its key.")
                             .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
             GridRow {
                 Text("API key").foregroundStyle(.secondary)
-                SecureField(settings.aiProvider == "openai" ? "Key for this address" : "sk-ant-…", text: $key)
+                SecureField(settings.aiProvider == AIAgent.anthropic ? "sk-ant-…" : settings.aiProvider == AIAgent.custom ? "Key for this address" : "API key", text: $key)
                     .textFieldStyle(.roundedBorder)
                     // Saved as it is typed or pasted: closing the window must not lose it.
                     .onChange(of: key) { saveKey() }
@@ -612,23 +636,22 @@ struct AIAgentCard: View {
             GridRow {
                 Color.clear.frame(width: 1, height: 1)
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) { testButton.controlSize(.small); Text("Kept in the Keychain").foregroundStyle(.secondary).fixedSize() }
-                    if let r = testResult { status(r.ok, r.ok ? "It answered." : "Not working.", r.ok ? "The key is saved in the Keychain." : r.text) }
+                    HStack(spacing: 8) { testButton.controlSize(.small); Text("Kept in a file only you can read").foregroundStyle(.secondary).fixedSize() }
+                    if let r = testResult { status(r.ok, r.ok ? "It answered." : "Not working.", r.ok ? "The key is saved." : r.text) }
                 }
             }
         }
         .font(.system(size: 12))
         .padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
-        .onChange(of: settings.aiProvider) {
-            // Each provider has model names of its own; start from a sensible one when the other's is still there.
-            if settings.aiProvider == "anthropic", !settings.aiModel.hasPrefix("claude") { settings.aiModel = "claude-haiku-5-5" }
-            if settings.aiProvider == "openai", settings.aiModel.hasPrefix("claude") {
-                settings.aiModel = AIAgent.presets.first { AIAgent.chatURL(from: $0.address) == AIAgent.chatURL(from: settings.aiBaseURL) }?.model ?? ""
-            }
+        .onChange(of: settings.aiProvider) { old, new in
+            // Each provider has model names of its own: remember the one in use, and bring back the new provider's.
+            settings.aiModels[old] = settings.aiModel
+            settings.aiModel = settings.aiModels[new] ?? AIAgent.defaultModel(provider: new, custom: settings.aiBaseURL)
+            namingPreset = false
         }
         // Each address has a key of its own: show the one that belongs to the address now in the field.
-        .onChange(of: settings.aiBaseURL) { testResult = nil; key = Keychain.get(keyAccount) ?? "" }
+        .onChange(of: settings.aiBaseURL) { testResult = nil; if AIAgent.keyAccount(provider: settings.aiProvider, baseURL: settings.aiBaseURL) != loadedAccount { loadKey() } }
     }
 
     // MARK: Presets
@@ -646,7 +669,7 @@ struct AIAgentCard: View {
     }
 
     private func isBuiltInName(_ name: String) -> Bool {
-        AIAgent.presets.contains { $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespaces)) == .orderedSame }
+        (AIAgent.presets + AIAgent.providers).contains { $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespaces)) == .orderedSame }
     }
 
     private func savePreset() {
@@ -661,9 +684,25 @@ struct AIAgentCard: View {
         saved.remove(preset)
         // Its key goes with it, unless another of the user's presets is at the same host.
         if let host = preset.host, !saved.presets.contains(where: { $0.host == host }) {
-            Keychain.set("", for: AIAgent.keyAccount(provider: "openai", baseURL: preset.address))
-            if same(preset.address, settings.aiBaseURL) { key = "" }
+            keySaver.cancel()
+            KeysFile.set("", for: AIAgent.keyAccount(provider: AIAgent.custom, baseURL: preset.address))
+            if same(preset.address, settings.aiBaseURL) { storedKey = ""; key = "" }
         }
+    }
+
+    /// One provider in the Provider choice: exactly one is chosen.
+    private func providerChip(_ id: String, _ name: String) -> some View {
+        let on = settings.aiProvider == id
+        return Button { settings.aiProvider = id } label: {
+            Text(name).lineLimit(1).fontWeight(on ? .semibold : .regular)
+                .foregroundStyle(on ? Color(nsColor: .textBackgroundColor) : Color.primary)
+                .padding(.horizontal, 9).frame(height: 22)
+                .background(Capsule().fill(on ? Color.primary : Color(nsColor: .controlBackgroundColor)))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.22)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(name).accessibilityAddTraits(on ? .isSelected : [])
     }
 
     /// One preset as a chip: click to use it. `onRemove` adds the × that only the user's own presets have.
@@ -697,17 +736,34 @@ struct AIAgentCard: View {
 
     private var keyAccount: String { AIAgent.keyAccount(provider: settings.aiProvider, baseURL: settings.aiBaseURL) }
 
+    /// Saved shortly after the last change, not on every keystroke, and under the address it was typed for.
     private func saveKey() {
         let wanted = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard wanted != (Keychain.get(keyAccount) ?? "") else { return }
-        if !Keychain.set(wanted, for: keyAccount) {
-            testResult = (false, "The Keychain refused to save the key.", false)
+        guard wanted != storedKey else { keySaver.cancel(); return }
+        keySaver.schedule(wanted, account: keyAccount) { ok in
+            if ok { storedKey = wanted } else { testResult = (false, "The key could not be saved.", false) }
+        }
+    }
+
+    /// The key for the address now in the field, read off the main thread.
+    /// Whatever was typed for the address before is saved first.
+    private func loadKey() {
+        keySaver.flush()
+        let account = keyAccount
+        loadedAccount = account
+        DispatchQueue.global(qos: .userInitiated).async {
+            let saved = KeysFile.get(account) ?? ""
+            DispatchQueue.main.async {
+                guard account == keyAccount else { return } // the address moved on while this was read
+                storedKey = saved
+                key = saved
+            }
         }
     }
 
     private var testButton: some View {
         Button(testing ? "Testing…" : "Test") {
-            if settings.aiBackend == "key" { saveKey() }
+            if settings.aiBackend == "key" { saveKey(); keySaver.flush() }
             testing = true; testResult = nil
             agent.run("Reply with the single word OK.") { result in
                 testing = false
@@ -758,5 +814,157 @@ final class AIPresetList: ObservableObject {
         guard now != stamp else { return }
         stamp = now
         presets = AIPresetsFile.load()
+    }
+}
+
+/// Pushing alerts to an iPhone through Bark: where to send them, and what besides the alert itself.
+struct PhoneCard: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var center: AlertCenter
+
+    @State private var key = ""
+    /// What is saved, as last read or written; and whether it has been read yet.
+    @State private var stored = ""
+    @State private var loaded = false
+    @State private var saver = KeySaver()
+    @State private var testing = false
+    @State private var testResult: (ok: Bool, text: String)?
+
+    private var summary: String {
+        let n = center.rules.filter { $0.enabled && $0.phone }.count
+        return n == 0 ? "No rule pushes to the phone yet." : "\(n) of \(center.rules.count) rules push to the phone."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Phone").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).padding(.leading, 4)
+            VStack(alignment: .leading, spacing: 0) {
+                SwitchRow(label: "Push alerts to my iPhone with Bark", sub: "Bark is a free app for iPhone and iPad. It has no Android version.", isOn: $settings.barkOn)
+                if settings.barkOn {
+                    HStack(alignment: .top, spacing: 14) {
+                        setup.frame(maxWidth: .infinity, alignment: .topLeading)
+                        VStack(alignment: .leading, spacing: 0) {
+                            (Text(summary).fontWeight(.semibold) + Text(" Choose rule by rule with the Phone switch beside each rule's On switch; rules that push show a small phone in the list.").foregroundColor(.secondary))
+                                .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true).padding(.bottom, 8)
+                            Divider()
+                            SwitchRow(label: "Issues break through Focus", sub: "Sent as time-sensitive, so they show while a Focus is on", isOn: $settings.barkUrgentIssues)
+                            Divider()
+                            SwitchRow(label: "Also push when an alert ends", sub: "One more push saying it is over, and how long it lasted", isOn: $settings.barkEnded)
+                            Divider()
+                            SwitchRow(label: "Add the AI agent's finding", sub: "The same push is updated once the finding is ready", isOn: $settings.barkFinding)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    .padding(.bottom, 10)
+                }
+            }
+            .padding(.horizontal, 14)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
+        }
+        .onAppear { loadKey() }
+        .onDisappear { saver.flush() }
+        .onChange(of: settings.barkOn) { loadKey() }
+    }
+
+    /// The saved key, read off the main thread.
+    private func loadKey() {
+        guard settings.barkOn, !loaded else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let saved = BarkSender.savedKey()
+            DispatchQueue.main.async {
+                loaded = true
+                stored = saved
+                if key.isEmpty { key = saved }
+            }
+        }
+    }
+
+    private var setup: some View {
+        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+            GridRow {
+                Text("Device key").foregroundStyle(.secondary).fixedSize()
+                SecureField("From the address Bark shows", text: $key).textFieldStyle(.roundedBorder)
+                    .onChange(of: key) { keyChanged() }
+                    .accessibilityLabel("Bark device key")
+            }
+            GridRow {
+                Text("Server").foregroundStyle(.secondary)
+                TextField(BarkPush.defaultServer, text: $settings.barkServer).textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Bark server address")
+            }
+            GridRow {
+                Color.clear.frame(width: 1, height: 1)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Button(testing ? "Sending…" : "Send a test") { test() }.controlSize(.small).disabled(testing || key.trimmingCharacters(in: .whitespaces).isEmpty)
+                        if let r = testResult {
+                            Image(systemName: r.ok ? "checkmark" : "exclamationmark.triangle.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(r.ok ? Color.green : Color.orange)
+                            Text(r.text).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }
+                    }
+                    Text("Open Bark on the phone and copy the key from the address it shows; you can paste the whole address. The key is kept on this Mac, in a file only you can read. Use your own server's address if you run one.")
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+    }
+
+    /// A whole pasted address is taken apart into the server and the key. The key is saved shortly after the last
+    /// change, not on every keystroke.
+    private func keyChanged() {
+        let parsed = BarkPush.parse(key)
+        if parsed.server != nil || key.contains("://") {
+            if let server = parsed.server { settings.barkServer = server }
+            key = parsed.key
+            return // setting `key` calls this again with the bare key
+        }
+        // A key supplied for one trial run, or typed into a run pointed at another server, is not the user's to keep.
+        guard loaded, ProcessInfo.processInfo.environment["UTMWATCH_BARK_KEY"] == nil, !BarkSender.redirected else { return }
+        guard parsed.key != stored else { saver.cancel(); return }
+        let value = parsed.key
+        saver.schedule(value, account: BarkSender.account) { ok in
+            if ok { stored = value } else { testResult = (false, "The key could not be saved.") }
+        }
+    }
+
+    private func test() {
+        testing = true; testResult = nil
+        let message = BarkPush.Message(title: "UTM Watch", body: "Test: alerts will arrive like this.", id: "utmwatch-test")
+        BarkSender.send(message, server: settings.barkServer, key: BarkPush.parse(key).key) { failure, _ in
+            testing = false
+            testResult = failure.map { (false, $0) } ?? (true, "Sent. Check your phone.")
+        }
+    }
+}
+
+/// Saves a key a moment after the last change to its field, off the main thread, and always under
+/// the account it was typed for.
+final class KeySaver {
+    private var pending: (value: String, account: String, done: (Bool) -> Void)?
+    private var work: DispatchWorkItem?
+
+    func schedule(_ value: String, account: String, done: @escaping (Bool) -> Void) {
+        work?.cancel()
+        pending = (value, account, done)
+        let item = DispatchWorkItem { [weak self] in self?.flush() }
+        work = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: item)
+    }
+
+    func cancel() { work?.cancel(); work = nil; pending = nil }
+
+    /// Saves now whatever is waiting: before a test, when the field's address changes, when the window closes.
+    func flush() {
+        work?.cancel(); work = nil
+        guard let p = pending else { return }
+        pending = nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ok = KeysFile.set(p.value, for: p.account)
+            DispatchQueue.main.async { p.done(ok) }
+        }
     }
 }

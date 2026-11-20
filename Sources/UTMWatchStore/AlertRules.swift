@@ -34,11 +34,14 @@ public struct AlertRule: Codable, Equatable, Identifiable {
     public var enabled: Bool
     /// VMs this rule leaves alone, by VM key.
     public var excluded: [String]
+    /// This rule's alerts are also pushed to the user's phone, when a phone is set up. Issues start on, risks off.
+    public var phone: Bool
 
     public var id: String { kind.rawValue }
 
-    public init(kind: AlertKind, level: AlertLevel, value: Double?, minutes: Int, enabled: Bool = true, excluded: [String] = []) {
+    public init(kind: AlertKind, level: AlertLevel, value: Double?, minutes: Int, enabled: Bool = true, excluded: [String] = [], phone: Bool? = nil) {
         self.kind = kind; self.level = level; self.value = value; self.minutes = minutes; self.enabled = enabled; self.excluded = excluded
+        self.phone = phone ?? (level == .issue)
     }
 
     public init(from decoder: Decoder) throws {
@@ -50,6 +53,7 @@ public struct AlertRule: Codable, Equatable, Identifiable {
         minutes = try c.decodeIfPresent(Int.self, forKey: .minutes) ?? d.minutes
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         excluded = try c.decodeIfPresent([String].self, forKey: .excluded) ?? []
+        phone = try c.decodeIfPresent(Bool.self, forKey: .phone) ?? (level == .issue)
     }
 
     /// The rule as a sentence, e.g. "When a VM uses more than 90% of its cores for 10 min".

@@ -27,6 +27,7 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
     var onShow: ((Int64) -> Void)?
 
     let agent: AIAgent
+    private let bark: BarkSender
     private let settings: AppSettings
     private let defaults = UserDefaults.standard
     private var engine: AlertEngine
@@ -46,6 +47,7 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
     init(settings: AppSettings) {
         self.settings = settings
         agent = AIAgent(settings: settings)
+        bark = BarkSender(settings: settings)
         let loaded = AlertRulesFile.load()
         rules = loaded
         engine = AlertEngine(rules: loaded)
@@ -57,6 +59,7 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
             suggestions = list
         }
         super.init()
+        pushed = Set(defaults.stringArray(forKey: "barkPushed") ?? [])
         suggestions = suggestions.filter { s in rules.contains { $0.kind == s.kind && ($0.minutes != s.rule.minutes || $0.value != s.rule.value) } }
         if Bundle.main.bundleIdentifier != nil { UNUserNotificationCenter.current().delegate = self }
     }
@@ -117,7 +120,7 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
         apply(engine.ingest(AlertProbe(probe)))
     }
 
-    private func apply(_ changes: [AlertChange]) {
+    private func apply(_ changes: [AlertChange], byUser: Bool = false) {
         guard !changes.isEmpty else { return }
         var events: [HistoryEvent] = []
         var ended = false
@@ -130,13 +133,27 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
                 if let store { io.async { [weak self] in self?.ids[a.key] = store.insertAlert(a) } }
                 // A risk that opens while its issue is already open says nothing new.
                 let outranked = AlertKind(rawValue: a.rule)?.escalation.map { self.engine.open[Alert.key(rule: $0.rawValue, subject: a.subject)] != nil } ?? false
-                if !outranked { notify(a) }
+                if !outranked {
+                    notify(a)
+                    push(a)
+                    if settings.barkOn, rules.first(where: { $0.id == a.rule })?.phone == true { pushed.insert(pushedKey(a)) }
+                }
                 if a.level == .issue { investigate(a.key) }
             case .updated(let a):
                 if let store { io.async { [weak self] in var b = a; b.id = self?.ids[a.key] ?? 0; store.updateAlert(b) } }
             case .closed(let key, let at):
-                let title = open.first { $0.key == key }?.title ?? key
+                let was = everything[key]
+                let title = was?.title ?? key
                 FileLog.shared.log("alert ended: \(title)")
+                // The phone hears that an alert ended only if it heard it begin, and only when the problem itself went
+                // away: closing an alert by hand, or switching its rule off, is not news.
+                if let was {
+                    let told = pushed.remove(pushedKey(was)) != nil
+                    let ruleOn = rules.first(where: { $0.id == was.rule })?.enabled == true
+                    if told, !byUser, ruleOn, settings.barkEnded {
+                        push(was, title: "Ended: \(was.title)", body: "It lasted \(AlertStyle.length(max(60_000, at - was.opened))).", level: .active, idSuffix: "-end")
+                    }
+                }
                 events.append(HistoryEvent(ts: Date().msSince1970, kind: HistoryEvent.alertEnd, vmKey: nil, label: "Ended: \(title)"))
                 if let store { io.async { [weak self] in if let id = self?.ids.removeValue(forKey: key) { store.closeAlert(id: id, at: at) } } }
                 investigating.remove(key)
@@ -148,7 +165,11 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
         onEvents?(events)
     }
 
+    /// Every open alert by key, including a risk hidden behind its issue; kept so an ending can still be described.
+    private var everything: [String: Alert] = [:]
+
     private func publish() {
+        everything = engine.open
         let all = Array(engine.open.values)
         open = all.filter { a in
             guard let stronger = AlertKind(rawValue: a.rule)?.escalation else { return true }
@@ -179,13 +200,13 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
     /// Silences this alert for a day.
     func mute(_ alert: Alert) {
         let now = Date().msSince1970
-        apply(engine.mute(alert.key, until: now + 86_400_000, at: now))
+        apply(engine.mute(alert.key, until: now + 86_400_000, at: now), byUser: true)
         defaults.set(engine.muted.mapValues { NSNumber(value: $0) }, forKey: "alertMuted")
     }
 
     /// "I stopped it myself": the alert goes away and stays away until the VM has run again.
     func acknowledge(_ alert: Alert) {
-        apply(engine.acknowledge(alert.key, at: Date().msSince1970))
+        apply(engine.acknowledge(alert.key, at: Date().msSince1970), byUser: true)
     }
 
     // MARK: Rules
@@ -201,7 +222,8 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
             suggestions.removeAll { $0.kind == rule.kind }
             saveSuggestions()
         }
-        recompute([rule.kind])
+        // The replay depends on the numbers and on which VMs are left out; the level, the switches and the phone do not move it.
+        if before.minutes != rules[i].minutes || before.value != rules[i].value || before.excluded != rules[i].excluded { recompute([rule.kind]) }
     }
 
     func restoreDefaults() {
@@ -282,6 +304,25 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
         completionHandler()
     }
 
+    // MARK: The phone
+
+    /// Sends an alert to the user's iPhone through Bark, when that is set up and the alert's rule is chosen for it.
+    /// Pushes for the same alert share an id, so a later one replaces the first on the phone.
+    private func push(_ a: Alert, title: String? = nil, body: String? = nil, level: BarkPush.Level? = nil, idSuffix: String = "") {
+        guard settings.barkOn, rules.first(where: { $0.id == a.rule })?.phone == true else { return }
+        bark.push(BarkPush.Message(title: title ?? "\(a.level.title): \(a.title)",
+                                   body: body ?? (a.finding.map { "\(a.what) \($0)" } ?? "\(a.what) \(a.todo)"),
+                                   level: level ?? (a.level == .issue && settings.barkUrgentIssues ? .timeSensitive : .active),
+                                   id: BarkSender.pushID(alertKey: a.key, opened: a.opened, suffix: idSuffix)))
+    }
+
+    /// Alerts whose opening went to the phone, by alert key and opening time. Only these get an "ended" push, and
+    /// the list outlives a restart so an alert pushed yesterday can still be closed on the phone today.
+    private var pushed: Set<String> = [] {
+        didSet { defaults.set(Array(pushed).sorted(), forKey: "barkPushed") }
+    }
+    private func pushedKey(_ a: Alert) -> String { BarkSender.pushID(alertKey: a.key, opened: a.opened) }
+
     // MARK: The AI agent
 
     /// Asks the agent what caused an issue and attaches its answer to the alert.
@@ -313,6 +354,8 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
                     self.io.async { var b = a; b.id = self.ids[key] ?? 0; store.updateAlert(b) }
                     self.publish()
                     self.notify(a, quiet: true)
+                    // The same push, updated in place and quietly: the phone has already rung for this alert once.
+                    if self.settings.barkFinding, self.pushed.contains(self.pushedKey(a)) { self.push(a, level: .passive) }
                     FileLog.shared.log("ai: looked into \(a.title)")
                 }
             }
