@@ -120,8 +120,47 @@ final class AIAgent {
 
     // MARK: An API key
 
+    /// A service with a chat-completions API that the Address field can be filled in for with one click.
+    struct Preset: Identifiable {
+        let id: String
+        let name: String
+        let address: String
+        /// A model name the service's own documentation uses; empty where there is no safe default.
+        let model: String
+    }
+
+    /// Addresses and model names as the services' documentation gave them in November 2026. They are only a start:
+    /// both fields stay editable, and accounts outside mainland China may need the service's international address.
+    static let presets: [Preset] = [
+        Preset(id: "deepseek", name: "DeepSeek", address: "https://api.deepseek.com", model: "deepseek-flash"),
+        Preset(id: "kimi", name: "Kimi", address: "https://api.moonshot.cn/v1", model: "kimi-k3.1-pro"),
+        Preset(id: "qwen", name: "Qwen", address: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen3.7-plus"),
+        Preset(id: "glm", name: "GLM", address: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3"),
+        Preset(id: "openai", name: "OpenAI", address: "https://api.openai.com/v1", model: ""),
+        Preset(id: "local", name: "On this Mac", address: "http://localhost:11434/v1", model: "qwen3:8b"),
+    ]
+
+    /// Where a key is kept in the Keychain. Each custom endpoint has a key of its own, by host, so a key entered for
+    /// one service is never sent to another when the address changes.
+    static func keyAccount(provider: String, baseURL: String) -> String {
+        guard provider != "anthropic" else { return "anthropic" }
+        let url = chatURL(from: baseURL)
+        return "custom:" + (url?.host ?? "") + (url?.port.map { ":\($0)" } ?? "")
+    }
+
+    /// The chat-completions address for what the user typed: a base address ("https://api.deepseek.com/v1"), with or
+    /// without a trailing slash, or the full address of the endpoint itself.
+    static func chatURL(from typed: String) -> URL? {
+        var base = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base.removeLast() }
+        if base.hasSuffix("/chat/completions") { base.removeLast("/chat/completions".count) }
+        guard let url = URL(string: base + "/chat/completions"), url.scheme == "http" || url.scheme == "https", url.host != nil else { return nil }
+        return url
+    }
+
     private static func runAPI(_ prompt: String, provider: String, model: String, baseURL: String) -> Result<String, Failure> {
-        let key = Keychain.get(provider) ?? ""
+        // Debug aid: `UTMWATCH_AI_KEY` supplies the key for one run, so a trial copy can be tested without saving a key.
+        let key = ProcessInfo.processInfo.environment["UTMWATCH_AI_KEY"] ?? Keychain.get(keyAccount(provider: provider, baseURL: baseURL)) ?? ""
         let model = model.trimmingCharacters(in: .whitespaces)
         guard !model.isEmpty else { return .failure(Failure(message: "No model name is set.")) }
         var request: URLRequest
@@ -133,8 +172,7 @@ final class AIAgent {
             request.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
             body = ["model": model, "max_tokens": 4000, "messages": [["role": "user", "content": prompt]]]
         } else {
-            let base = baseURL.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            guard let url = URL(string: base + "/chat/completions"), url.scheme == "http" || url.scheme == "https" else {
+            guard let url = chatURL(from: baseURL) else {
                 return .failure(Failure(message: "The address is not a web address."))
             }
             request = URLRequest(url: url)
@@ -165,7 +203,9 @@ final class AIAgent {
                 if obj["stop_reason"] as? String == "refusal" { result = .failure(Failure(message: "The model declined to answer.")); return }
                 text = ((obj["content"] as? [[String: Any]]) ?? []).filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
             } else {
-                text = ((((obj["choices"] as? [[String: Any]])?.first)?["message"] as? [String: Any])?["content"] as? String) ?? ""
+                // Chat completions: the answer is choices[0].message.content. Some servers send it as a list of parts.
+                let content = (((obj["choices"] as? [[String: Any]])?.first)?["message"] as? [String: Any])?["content"]
+                text = (content as? String) ?? ((content as? [[String: Any]]) ?? []).compactMap { $0["text"] as? String }.joined()
             }
             text = text.trimmingCharacters(in: .whitespacesAndNewlines)
             result = text.isEmpty ? .failure(Failure(message: "The model gave an empty answer.")) : .success(text)

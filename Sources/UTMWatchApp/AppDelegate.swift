@@ -233,10 +233,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // Debug aid: one real request of each kind through Claude Code, written to a file. For this run only: nothing is saved.
             settings.aiChoicePersists = false
             settings.aiBackend = "cli"; settings.aiCommand = path("--ai-command") ?? ""
+            // `--ai-endpoint <address> --ai-model <name>` sends the same two requests to a chat-completions server instead.
+            if let endpoint = path("--ai-endpoint") {
+                settings.aiBackend = "key"; settings.aiProvider = "openai"; settings.aiBaseURL = endpoint
+                settings.aiModel = path("--ai-model") ?? "test-model"
+            }
             let center = model.alerts
             var lines: [String] = []
             center.makeRule(from: "Tell me if any VM uses more than 80% of its CPU for 5 minutes") { [weak self] draft in
                 lines.append("rule: \(draft)")
+                // `--ai-check-rule-only` stops here: the second request carries this Mac's readings and VM names.
+                if CommandLine.arguments.contains("--ai-check-rule-only") {
+                    try? lines.joined(separator: "\n\n").write(toFile: p, atomically: true, encoding: .utf8)
+                    return
+                }
                 guard let store = self?.model.store else { return }
                 let now = Date().msSince1970
                 let alert = Alert(rule: "memory", level: .risk, subject: "host", vmKey: nil, title: "Memory is short",

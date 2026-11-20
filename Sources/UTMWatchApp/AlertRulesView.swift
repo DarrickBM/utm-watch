@@ -484,9 +484,9 @@ struct AIAgentCard: View {
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .onAppear { key = Keychain.get(settings.aiProvider) ?? "" }
+        .onAppear { key = Keychain.get(keyAccount) ?? "" }
         .onChange(of: settings.aiBackend) { testResult = nil; claudePath = AIAgent.findClaude() }
-        .onChange(of: settings.aiProvider) { testResult = nil; key = Keychain.get(settings.aiProvider) ?? "" }
+        .onChange(of: settings.aiProvider) { testResult = nil; key = Keychain.get(keyAccount) ?? "" }
     }
 
     private func status(_ ok: Bool, _ strong: String, _ rest: String) -> some View {
@@ -541,20 +541,42 @@ struct AIAgentCard: View {
             GridRow {
                 Text("Provider").foregroundStyle(.secondary)
                 Picker("Provider", selection: $settings.aiProvider) {
-                    Text("Anthropic").tag("anthropic"); Text("OpenAI-compatible").tag("openai")
+                    Text("Anthropic").tag("anthropic"); Text("Custom endpoint").tag("openai")
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
             }
             if settings.aiProvider == "openai" {
-                GridRow {
-                    Text("Address").foregroundStyle(.secondary)
-                    TextField("https://api.openai.com/v1", text: $settings.aiBaseURL).textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Address of the OpenAI-compatible server")
+                GridRow(alignment: .top) {
+                    Text("Address").foregroundStyle(.secondary).padding(.top, 4)
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("https://…/v1", text: $settings.aiBaseURL).textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Address of the chat-completions service")
+                        FlowLayout(spacing: 5) {
+                            ForEach(AIAgent.presets) { preset in
+                                let on = AIAgent.chatURL(from: settings.aiBaseURL) == AIAgent.chatURL(from: preset.address)
+                                Button {
+                                    settings.aiBaseURL = preset.address
+                                    settings.aiModel = preset.model
+                                } label: {
+                                    Text(preset.name).foregroundStyle(on ? Color(nsColor: .textBackgroundColor) : Color.primary)
+                                        .padding(.horizontal, 9).frame(height: 22)
+                                        .background(Capsule().fill(on ? Color.primary : Color(nsColor: .controlBackgroundColor)))
+                                        .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.22)))
+                                        .contentShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .help("Fills in \(preset.name)'s address\(preset.model.isEmpty ? "" : " and the model \(preset.model)")")
+                                .accessibilityLabel("\(preset.name)\(on ? ", selected" : "")")
+                            }
+                        }
+                        Text("Any service that speaks the OpenAI chat-completions API. Pick one to fill in its address, or type your own.")
+                            .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             GridRow {
                 Text("API key").foregroundStyle(.secondary)
-                SecureField(settings.aiProvider == "openai" ? "Leave empty for a model on this Mac" : "sk-ant-…", text: $key)
+                SecureField(settings.aiProvider == "openai" ? "Key for this address" : "sk-ant-…", text: $key)
                     .textFieldStyle(.roundedBorder)
                     // Saved as it is typed or pasted: closing the window must not lose it.
                     .onChange(of: key) { saveKey() }
@@ -568,7 +590,7 @@ struct AIAgentCard: View {
                 Color.clear.frame(width: 1, height: 1)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) { testButton.controlSize(.small); Text("Kept in the Keychain").foregroundStyle(.secondary).fixedSize() }
-                    if let r = testResult { status(r.ok, r.ok ? "Key works." : "Not working.", r.ok ? "Saved in the Keychain." : r.text) }
+                    if let r = testResult { status(r.ok, r.ok ? "It answered." : "Not working.", r.ok ? "The key is saved in the Keychain." : r.text) }
                 }
             }
         }
@@ -578,14 +600,20 @@ struct AIAgentCard: View {
         .onChange(of: settings.aiProvider) {
             // Each provider has model names of its own; start from a sensible one when the other's is still there.
             if settings.aiProvider == "anthropic", !settings.aiModel.hasPrefix("claude") { settings.aiModel = "claude-haiku-5-5" }
-            if settings.aiProvider == "openai", settings.aiModel.hasPrefix("claude") { settings.aiModel = "" }
+            if settings.aiProvider == "openai", settings.aiModel.hasPrefix("claude") {
+                settings.aiModel = AIAgent.presets.first { AIAgent.chatURL(from: $0.address) == AIAgent.chatURL(from: settings.aiBaseURL) }?.model ?? ""
+            }
         }
+        // Each address has a key of its own: show the one that belongs to the address now in the field.
+        .onChange(of: settings.aiBaseURL) { testResult = nil; key = Keychain.get(keyAccount) ?? "" }
     }
+
+    private var keyAccount: String { AIAgent.keyAccount(provider: settings.aiProvider, baseURL: settings.aiBaseURL) }
 
     private func saveKey() {
         let wanted = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard wanted != (Keychain.get(settings.aiProvider) ?? "") else { return }
-        if !Keychain.set(key.trimmingCharacters(in: .whitespacesAndNewlines), for: settings.aiProvider) {
+        guard wanted != (Keychain.get(keyAccount) ?? "") else { return }
+        if !Keychain.set(wanted, for: keyAccount) {
             testResult = (false, "The Keychain refused to save the key.", false)
         }
     }

@@ -48,8 +48,8 @@ final class AppSettings: ObservableObject {
     @Published var aiCommand: String { didSet { if aiChoicePersists { defaults.set(aiCommand, forKey: "aiCommand") } } }
     /// "anthropic" or "openai" (any server that speaks the OpenAI chat API, including one on this Mac).
     @Published var aiProvider: String { didSet { if aiChoicePersists { defaults.set(aiProvider, forKey: "aiProvider") } } }
-    @Published var aiModel: String { didSet { defaults.set(aiModel, forKey: "aiModel") } }
-    @Published var aiBaseURL: String { didSet { defaults.set(aiBaseURL, forKey: "aiBaseURL") } }
+    @Published var aiModel: String { didSet { if aiChoicePersists { defaults.set(aiModel, forKey: "aiModel") } } }
+    @Published var aiBaseURL: String { didSet { if aiChoicePersists { defaults.set(aiBaseURL, forKey: "aiBaseURL") } } }
     @Published var aiInvestigate: Bool { didSet { defaults.set(aiInvestigate, forKey: "aiInvestigate") } }
     @Published var aiSuggest: Bool { didSet { defaults.set(aiSuggest, forKey: "aiSuggest") } }
     @Published var launchAtLogin: Bool
@@ -60,7 +60,7 @@ final class AppSettings: ObservableObject {
                                      "allowAgents": true, "captureProcesses": true, "checkForUpdates": true, "showOtherVMs": true,
                                      "hubPort": 8787, "fleetAlerts": true, "hiddenTracks": [TrackKind.swap.rawValue],
                                      "notifyIssues": true, "notifyRisks": true, "aiBackend": "off", "aiProvider": "anthropic",
-                                     "aiModel": "claude-haiku-5-5", "aiBaseURL": "https://api.openai.com/v1", "aiInvestigate": true, "aiSuggest": true])
+                                     "aiModel": "claude-haiku-5-5", "aiBaseURL": "https://api.deepseek.com", "aiInvestigate": true, "aiSuggest": true])
         let interval = defaults.integer(forKey: "sampleInterval")
         sampleInterval = [1, 2, 5].contains(interval) ? interval : 2
         rateUnits = RateUnits(rawValue: defaults.string(forKey: "rateUnits") ?? "") ?? .bytes
@@ -84,7 +84,7 @@ final class AppSettings: ObservableObject {
         aiCommand = defaults.string(forKey: "aiCommand") ?? ""
         aiProvider = defaults.string(forKey: "aiProvider") == "openai" ? "openai" : "anthropic"
         aiModel = defaults.string(forKey: "aiModel") ?? "claude-haiku-5-5"
-        aiBaseURL = defaults.string(forKey: "aiBaseURL") ?? "https://api.openai.com/v1"
+        aiBaseURL = defaults.string(forKey: "aiBaseURL") ?? "https://api.deepseek.com"
         aiInvestigate = defaults.bool(forKey: "aiInvestigate")
         aiSuggest = defaults.bool(forKey: "aiSuggest")
         launchAtLogin = SMAppService.mainApp.status == .enabled
