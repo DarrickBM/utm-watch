@@ -210,7 +210,7 @@ public enum AlertRulesFile {
         // Rules of a kind this copy does not know are skipped one by one, so a newer file still loads.
         guard let raw = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return AlertRule.defaults }
         let rules = raw.compactMap { item -> AlertRule? in
-            guard let d = try? JSONSerialization.data(withJSONObject: item) else { return nil }
+            guard item is [String: Any], let d = try? JSONSerialization.data(withJSONObject: item) else { return nil }
             return try? JSONDecoder().decode(AlertRule.self, from: d)
         }
         return AlertRule.merged(rules)

@@ -434,6 +434,9 @@ struct AIAgentCard: View {
     @ObservedObject var settings: AppSettings
     let agent: AIAgent
 
+    @StateObject private var saved = AIPresetList()
+    @State private var namingPreset = false
+    @State private var presetName = ""
     @State private var claudePath: String? = AIAgent.findClaude()
     @State private var editingCommand = false
     @State private var key = ""
@@ -484,7 +487,8 @@ struct AIAgentCard: View {
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .onAppear { key = Keychain.get(keyAccount) ?? "" }
+        .onAppear { key = Keychain.get(keyAccount) ?? ""; saved.watch(true) }
+        .onDisappear { saved.watch(false) }
         .onChange(of: settings.aiBackend) { testResult = nil; claudePath = AIAgent.findClaude() }
         .onChange(of: settings.aiProvider) { testResult = nil; key = Keychain.get(keyAccount) ?? "" }
     }
@@ -553,23 +557,42 @@ struct AIAgentCard: View {
                             .accessibilityLabel("Address of the chat-completions service")
                         FlowLayout(spacing: 5) {
                             ForEach(AIAgent.presets) { preset in
-                                let on = AIAgent.chatURL(from: settings.aiBaseURL) == AIAgent.chatURL(from: preset.address)
+                                chip(preset.name, address: preset.address, model: preset.model, onRemove: nil)
+                            }
+                            // The user's own, after the built-in ones; only these can be removed.
+                            ForEach(saved.presets, id: \.name) { preset in
+                                chip(preset.name, address: preset.address, model: preset.model, onRemove: { remove(preset) })
+                            }
+                            if canSavePreset, !namingPreset {
                                 Button {
-                                    settings.aiBaseURL = preset.address
-                                    settings.aiModel = preset.model
+                                    presetName = AIPreset.host(of: settings.aiBaseURL) ?? ""
+                                    namingPreset = true
                                 } label: {
-                                    Text(preset.name).foregroundStyle(on ? Color(nsColor: .textBackgroundColor) : Color.primary)
-                                        .padding(.horizontal, 9).frame(height: 22)
-                                        .background(Capsule().fill(on ? Color.primary : Color(nsColor: .controlBackgroundColor)))
-                                        .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.22)))
+                                    Text("+ Save as preset").fontWeight(.semibold)
+                                        .padding(.horizontal, 10).frame(height: 22)
+                                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
                                         .contentShape(Capsule())
                                 }
                                 .buttonStyle(.plain)
-                                .help("Fills in \(preset.name)'s address\(preset.model.isEmpty ? "" : " and the model \(preset.model)")")
-                                .accessibilityLabel("\(preset.name)\(on ? ", selected" : "")")
+                                .help("Keeps this address and model under a name of your own")
                             }
                         }
-                        Text("Any service that speaks the OpenAI chat-completions API. Pick one to fill in its address, or type your own.")
+                        if canSavePreset, namingPreset {
+                            HStack(spacing: 6) {
+                                Text("Name").foregroundStyle(.secondary).fixedSize()
+                                TextField("Name for this endpoint", text: $presetName).textFieldStyle(.roundedBorder)
+                                    .onSubmit { savePreset() }
+                                    .accessibilityLabel("Name for this preset")
+                                Button("Save") { savePreset() }.buttonStyle(.borderedProminent)
+                                    .disabled(presetName.trimmingCharacters(in: .whitespaces).isEmpty)
+                                Button("Cancel") { namingPreset = false }
+                            }
+                            .controlSize(.small)
+                            if isBuiltInName(presetName) {
+                                Text("That is the name of a built-in preset; choose another.").foregroundStyle(.secondary)
+                            }
+                        }
+                        Text("Any service that speaks the OpenAI chat-completions API. Pick one to fill in its address and model, or type your own and save it as a preset. The × on one of yours removes it and forgets its key; the built-in ones stay.")
                             .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -608,6 +631,70 @@ struct AIAgentCard: View {
         .onChange(of: settings.aiBaseURL) { testResult = nil; key = Keychain.get(keyAccount) ?? "" }
     }
 
+    // MARK: Presets
+
+    private func same(_ a: String, _ b: String) -> Bool {
+        guard let x = AIAgent.chatURL(from: a) else { return false }
+        return x == AIAgent.chatURL(from: b)
+    }
+
+    /// The address in the field is a usable one that no preset holds yet, so it can be saved as one.
+    private var canSavePreset: Bool {
+        AIAgent.chatURL(from: settings.aiBaseURL) != nil
+            && !AIAgent.presets.contains { same($0.address, settings.aiBaseURL) }
+            && !saved.presets.contains { same($0.address, settings.aiBaseURL) }
+    }
+
+    private func isBuiltInName(_ name: String) -> Bool {
+        AIAgent.presets.contains { $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespaces)) == .orderedSame }
+    }
+
+    private func savePreset() {
+        let name = presetName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !isBuiltInName(name) else { return }
+        saved.add(AIPreset(name: name, address: settings.aiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                           model: settings.aiModel.trimmingCharacters(in: .whitespacesAndNewlines)))
+        namingPreset = false
+    }
+
+    private func remove(_ preset: AIPreset) {
+        saved.remove(preset)
+        // Its key goes with it, unless another of the user's presets is at the same host.
+        if let host = preset.host, !saved.presets.contains(where: { $0.host == host }) {
+            Keychain.set("", for: AIAgent.keyAccount(provider: "openai", baseURL: preset.address))
+            if same(preset.address, settings.aiBaseURL) { key = "" }
+        }
+    }
+
+    /// One preset as a chip: click to use it. `onRemove` adds the × that only the user's own presets have.
+    private func chip(_ name: String, address: String, model: String, onRemove: (() -> Void)?) -> some View {
+        let on = same(address, settings.aiBaseURL)
+        return HStack(spacing: 0) {
+            Button {
+                settings.aiBaseURL = address
+                settings.aiModel = model
+                namingPreset = false
+            } label: {
+                Text(name).lineLimit(1)
+                    .padding(.leading, 9).padding(.trailing, onRemove == nil ? 9 : 3).frame(height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Fills in \(name)'s address\(model.isEmpty ? "" : " and the model \(model)")")
+            .accessibilityLabel("\(name)\(on ? ", selected" : "")")
+            if let onRemove {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).frame(width: 20, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Remove \(name) and forget its key")
+                .accessibilityLabel("Remove \(name)")
+            }
+        }
+        .foregroundStyle(on ? Color(nsColor: .textBackgroundColor) : Color.primary)
+        .background(Capsule().fill(on ? Color.primary : Color(nsColor: .controlBackgroundColor)))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.22)))
+    }
+
     private var keyAccount: String { AIAgent.keyAccount(provider: settings.aiProvider, baseURL: settings.aiBaseURL) }
 
     private func saveKey() {
@@ -632,5 +719,44 @@ struct AIAgentCard: View {
         }
         .disabled(testing)
         .help("Asks the agent one short question to check that it answers")
+    }
+}
+
+/// The user's own endpoint presets: the list in `ai-presets.json`, kept in step with the file in both directions.
+final class AIPresetList: ObservableObject {
+    @Published private(set) var presets: [AIPreset] = AIPresetsFile.load()
+    private var stamp = AIPresetsFile.modified()
+    private var timer: Timer?
+
+    func add(_ preset: AIPreset) {
+        var list = presets.filter { $0.name.caseInsensitiveCompare(preset.name) != .orderedSame }
+        list.append(preset)
+        write(list)
+    }
+
+    func remove(_ preset: AIPreset) { write(presets.filter { $0 != preset }) }
+
+    private func write(_ list: [AIPreset]) {
+        AIPresetsFile.save(list)
+        presets = list
+        stamp = AIPresetsFile.modified()
+    }
+
+    /// While the card is on screen, a hand edit of the file shows up within a couple of seconds.
+    func watch(_ on: Bool) {
+        timer?.invalidate(); timer = nil
+        guard on else { return }
+        reloadIfChanged()
+        let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.reloadIfChanged() }
+        t.tolerance = 0.5
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    private func reloadIfChanged() {
+        let now = AIPresetsFile.modified()
+        guard now != stamp else { return }
+        stamp = now
+        presets = AIPresetsFile.load()
     }
 }

@@ -872,10 +872,25 @@ do {
     custom[0].value = 80; custom[0].excluded = ["A"]; custom[6].enabled = false
     AlertRulesFile.save(custom, path: rulesPath)
     check(AlertRulesFile.load(path: rulesPath) == custom, "rules survive being saved and loaded")
-    try? Data(#"[{"kind":"from_the_future","minutes":1},{"kind":"cpu","value":70}]"#.utf8).write(to: URL(fileURLWithPath: rulesPath))
+    try? Data(#"[{"kind":"from_the_future","minutes":1},"junk",7,{"kind":"cpu","value":70}]"#.utf8).write(to: URL(fileURLWithPath: rulesPath))
     let loaded = AlertRulesFile.load(path: rulesPath)
     check(loaded.count == AlertKind.allCases.count && loaded.first?.value == 70 && loaded.first?.minutes == 10, "an unknown rule in the file is skipped and missing fields take the defaults")
     check(AlertRulesFile.load(path: dir + "/missing.json") == AlertRule.defaults, "no rules file means the default rules")
+    // The user's own endpoint presets, in a file that can be edited by hand.
+    let presetsPath = dir + "/ai-presets.json"
+    check(AIPresetsFile.load(path: presetsPath).isEmpty && AIPresetsFile.modified(path: presetsPath) == nil, "no presets file means no saved presets")
+    let mine = [AIPreset(name: "Office gateway", address: "https://gateway.office.example/v1", model: "glm-5.3-flash"),
+                AIPreset(name: "On the server", address: "http://10.0.0.5:8000/v1", model: "")]
+    AIPresetsFile.save(mine, path: presetsPath)
+    check(AIPresetsFile.load(path: presetsPath) == mine && AIPresetsFile.modified(path: presetsPath) != nil, "presets survive being saved and loaded")
+    check(mine[0].host == "gateway.office.example" && mine[1].host == "10.0.0.5:8000" && AIPreset.host(of: "not an address") == nil && AIPreset.host(of: "ftp://x.example") == nil,
+          "a preset knows its host, and only web addresses count")
+    try? Data(#"[{"name":" Kimi at work ","address":"https://llm.example/v1/"},{"name":"","address":"https://a.example"},{"name":"No address"},{"name":"Bad","address":"nonsense"},"junk",{"name":"kimi at work","address":"https://other.example/v1","model":"x"}]"#.utf8)
+        .write(to: URL(fileURLWithPath: presetsPath))
+    check(AIPresetsFile.load(path: presetsPath) == [AIPreset(name: "Kimi at work", address: "https://llm.example/v1/", model: "")],
+          "a hand-edited file keeps its usable entries: the unnamed, the addressless, the unusable and the repeated name are skipped")
+    try? Data("{ not a list".utf8).write(to: URL(fileURLWithPath: presetsPath))
+    check(AIPresetsFile.load(path: presetsPath).isEmpty, "an unreadable presets file is no presets, not a crash")
     try? FileManager.default.removeItem(atPath: dir)
 }
 

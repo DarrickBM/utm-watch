@@ -167,6 +167,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // For this run only: the choice is not saved, so a trial copy cannot change the real setting.
         if let backend = value("--ai-backend"), ["off", "cli", "key"].contains(backend) { settings.aiChoicePersists = false; settings.aiBackend = backend }
         if let provider = value("--ai-provider"), ["anthropic", "openai"].contains(provider) { settings.aiChoicePersists = false; settings.aiProvider = provider }
+        if let endpoint = value("--ai-endpoint") {
+            settings.aiChoicePersists = false
+            settings.aiBaseURL = endpoint; settings.aiModel = value("--ai-model") ?? settings.aiModel
+        }
         showAlertRules()
         if let k = args.firstIndex(of: "--snapshot-size"), k + 2 < args.count, let w = Double(args[k + 1]), let h = Double(args[k + 2]) {
             alertRulesWindow?.setContentSize(NSSize(width: w, height: h))

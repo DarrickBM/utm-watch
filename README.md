@@ -87,7 +87,7 @@ UTM Watch tells you about **risks** (something will break if it carries on: a di
 
 Every rule is a sentence whose numbers you change in the **Alert rules** window (right-click the menu bar item). The window replays each rule over your last 7 days and says how often it would have alerted you, before you rely on it.
 
-An AI agent is optional and off by default. Switched on, it can write a rule from a sentence, look into each issue and add the likely cause to the alert, and suggest better numbers for rules that alert too often. It runs on the Claude Code already on your Mac, another command of your choice, or a model reached with your own API key (Anthropic, or any service with an OpenAI-style chat-completions API: DeepSeek, Kimi, Qwen, GLM, OpenAI, or a model on your Mac). The key is kept in the Keychain.
+An AI agent is optional and off by default. Switched on, it can write a rule from a sentence, look into each issue and add the likely cause to the alert, and suggest better numbers for rules that alert too often. It runs on the Claude Code already on your Mac, another command of your choice, or a model reached with your own API key (Anthropic, or any service with an OpenAI-style chat-completions API: DeepSeek, Kimi, Qwen, GLM, OpenAI, or a model on your Mac). The key is kept in the Keychain. An endpoint of your own can be saved as a preset; your presets are in `~/Library/Application Support/UTM Watch/ai-presets.json`, a list of `{"name", "address", "model"}` that you can also edit by hand.
 
 ## AI diagnosis with an MCP server
 
