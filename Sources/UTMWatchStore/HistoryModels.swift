@@ -71,17 +71,22 @@ public struct HostPoint: Equatable, Codable {
     public var cores: Int
     /// Cores busy across the whole Mac.
     public var cpu: Double?
+    /// Bytes free on the Mac's own disk and its size; nil for history recorded before this was measured.
+    public var diskFree: Double?
+    public var diskTotal: Double?
 
-    public init(t: Int64, used: Double, other: Double, allocatable: Double, pressure: Int, swapUsed: Double, swapTotal: Double, cores: Int, cpu: Double? = nil) {
+    public init(t: Int64, used: Double, other: Double, allocatable: Double, pressure: Int, swapUsed: Double, swapTotal: Double, cores: Int, cpu: Double? = nil,
+                diskFree: Double? = nil, diskTotal: Double? = nil) {
         self.t = t; self.used = used; self.other = other; self.allocatable = allocatable
         self.pressure = pressure; self.swapUsed = swapUsed; self.swapTotal = swapTotal; self.cores = cores; self.cpu = cpu
+        self.diskFree = diskFree; self.diskTotal = diskTotal
     }
 
     public init(snapshot s: Snapshot) {
         self.init(t: s.timestamp.msSince1970, used: Double(s.host.hostUsed), other: Double(s.host.hostOtherUsed),
                   allocatable: Double(s.host.allocatable), pressure: HostPoint.code(s.host.pressure),
                   swapUsed: Double(s.host.swapUsed), swapTotal: Double(s.host.swapTotal), cores: s.host.allocatedCores,
-                  cpu: s.host.hostCPUCores)
+                  cpu: s.host.hostCPUCores, diskFree: s.host.diskFreeBytes.map { Double($0) }, diskTotal: s.host.diskTotalBytes.map { Double($0) })
     }
 
     public static func code(_ p: MemoryPressure) -> Int {
@@ -101,7 +106,9 @@ public struct HistoryEvent: Equatable, Codable {
     }
 
     public static let warningKinds: Set<String> = ["pressure_warning", "pressure_critical", "swap_high", "cpu_limit", "disk_high", "link_weak", "link_down", "sleep"]
-    public var isWarning: Bool { HistoryEvent.warningKinds.contains(kind) }
+    /// An alert opening, as a risk or as an issue, and ending.
+    public static let alertRisk = "alert_risk", alertIssue = "alert_issue", alertEnd = "alert_end"
+    public var isWarning: Bool { HistoryEvent.warningKinds.contains(kind) || kind == HistoryEvent.alertRisk || kind == HistoryEvent.alertIssue }
 }
 
 /// Ping results for one target: a single probe, or a bucket of them.

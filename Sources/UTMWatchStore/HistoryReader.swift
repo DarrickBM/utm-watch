@@ -14,8 +14,10 @@ struct StoreScope {
     var eventKey = "vm_key"        // expression giving an event's VM key, NULL when it has none
     /// Width of one raw sample in milliseconds.
     var rawMs: Double = 2000
+    /// The Mac's own disk space is recorded here. The hub's tables do not carry it.
+    var hostDisk = false
 
-    static let local = StoreScope()
+    static let local = StoreScope(hostDisk: true)
 
     static func host(_ id: Int64, rawMs: Double) -> StoreScope {
         StoreScope(vmWhere: "WHERE host_id = \(id)",
@@ -87,9 +89,24 @@ enum HistoryReader {
             FROM host_sample WHERE ts >= ?1 AND ts <= ?2\(s.hostAnd) GROUP BY b ORDER BY b
             """
         let hq = try db.prepare(hostSQL).bind(1, from).bind(2, to).bind(3, buckets).bind(4, span)
+        var hostBucket: [Int64] = []
         while hq.step() {
+            hostBucket.append(hq.int(0))
             h.host.append(HostPoint(t: hq.int(1), used: hq.double(2), other: hq.double(3), allocatable: hq.double(4),
                                     pressure: Int(hq.int(5)), swapUsed: hq.double(6), swapTotal: hq.double(7), cores: Int(hq.int(8)), cpu: hq.doubleOrNil(9)))
+        }
+        // The Mac's own disk space, bucketed the same way and laid onto the host points. A database from before it was
+        // measured has no such table, and simply has no figure.
+        if s.hostDisk, let dq = try? db.prepare(useRollup ? """
+            SELECT (minute * 60000 + 30000 - ?1) * ?3 / ?4 AS b, min(free), max(total) FROM host_disk_1m
+            WHERE minute >= ?1 / 60000 AND minute <= ?2 / 60000 GROUP BY b
+            """ : """
+            SELECT (ts - ?1) * ?3 / ?4 AS b, min(free), max(total) FROM host_disk WHERE ts >= ?1 AND ts <= ?2 GROUP BY b
+            """) {
+            dq.bind(1, from).bind(2, to).bind(3, buckets).bind(4, span)
+            var disk: [Int64: (Double?, Double?)] = [:]
+            while dq.step() { disk[dq.int(0)] = (dq.doubleOrNil(1), dq.doubleOrNil(2)) }
+            for i in h.host.indices { if let d = disk[hostBucket[i]] { h.host[i].diskFree = d.0; h.host[i].diskTotal = d.1 } }
         }
 
         let probeSQL = useRollup ? """
@@ -137,6 +154,10 @@ enum HistoryReader {
             SELECT \(s.hostCols)ts / 60000, avg(used), avg(other), min(allocatable), max(pressure), max(swap_used), max(swap_total), max(cores), max(cpu)
             FROM host_sample WHERE ts >= ? AND ts < ?\(s.hostAnd) GROUP BY \(s.hostCols)ts / 60000
             """).bind(1, fromMinute * 60000).bind(2, toMinute * 60000).run()
+        if s.hostDisk {
+            try db.prepare("INSERT OR REPLACE INTO host_disk_1m SELECT ts / 60000, min(free), max(total) FROM host_disk WHERE ts >= ? AND ts < ? GROUP BY ts / 60000")
+                .bind(1, fromMinute * 60000).bind(2, toMinute * 60000).run()
+        }
     }
 
     /// Rolls ping results of the minutes in `fromMinute..<toMinute` into `probe_1m`.

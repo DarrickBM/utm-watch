@@ -1,0 +1,608 @@
+import AppKit
+import SwiftUI
+import UTMWatchCore
+import UTMWatchStore
+
+/// The Alert rules window: every rule as a sentence whose numbers change in place, a check of the rule against the
+/// last 7 days of this Mac's own history, and the AI agent and notification settings.
+struct AlertRulesView: View {
+    @ObservedObject var center: AlertCenter
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var model: AppModel
+
+    /// Debug aid: the rule the window opens on.
+    static var initialKind: AlertKind = .cpu
+    @State private var selected: AlertKind = AlertRulesView.initialKind
+    /// A rule the AI agent proposes, shown in the editor until the user takes or drops it.
+    @State private var draft: AlertRule?
+    @State private var draftResult: AlertReplay.Result?
+    @State private var request = ""
+    @State private var asking = false
+    @State private var note: String?
+
+    private var rule: AlertRule { draft ?? center.rules.first { $0.kind == selected } ?? selected.spec.rule }
+    private var result: AlertReplay.Result? { draft != nil ? draftResult : center.replay[selected] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            describeBar
+            HStack(alignment: .top, spacing: 16) {
+                ruleList.frame(width: 440)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        editor
+                        HStack(alignment: .top, spacing: 14) {
+                            AIAgentCard(settings: settings, agent: center.agent)
+                            notificationsCard
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+            }
+        }
+        .font(.system(size: 13))
+        .padding(.horizontal, 20).padding(.vertical, 16)
+        .frame(minWidth: 1180, minHeight: 760)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear { center.loadReplay() }
+    }
+
+    // MARK: A rule from a sentence
+
+    private var describeBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkle").font(.system(size: 15))
+                TextField("Describe an alert, e.g. tell me if any VM uses more than 80% of its CPU for 5 minutes", text: $request)
+                    .textFieldStyle(.roundedBorder).font(.system(size: 14))
+                    .onSubmit { ask() }
+                    .disabled(!center.agent.isOn || asking)
+                    .accessibilityLabel("Describe an alert")
+                if asking { ProgressView().controlSize(.small) }
+                Button("Make a rule") { ask() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!center.agent.isOn || asking || request.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            Text(note ?? (center.agent.isOn
+                 ? "Say what you want to be told about. Your AI agent turns it into one of the rules below, where you can check it against last week before it goes live."
+                 : "Writing a rule from a sentence needs an AI agent; choose one under \"AI agent\" below. Without one, change the rules by hand in the list."))
+                .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 28).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .textBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.14)))
+    }
+
+    private func ask() {
+        let text = request.trimmingCharacters(in: .whitespaces)
+        guard center.agent.isOn, !asking, !text.isEmpty else { return }
+        asking = true; note = nil
+        center.makeRule(from: text) { reply in
+            asking = false
+            switch reply {
+            case .rule(let r):
+                selected = r.kind
+                setDraft(r)
+                note = "Your AI agent proposes the rule shown below. Check it against last week, change its numbers if you like, then use it or drop it."
+            case .failed(let why):
+                note = why
+            }
+        }
+    }
+
+    private func setDraft(_ r: AlertRule?) {
+        draft = r
+        draftResult = r.flatMap { center.preview($0) }
+    }
+
+    /// Steppers and switches change the proposal while one is shown, and the live rule otherwise.
+    private func change(_ r: AlertRule) {
+        if draft != nil { setDraft(r) } else { center.update(r) }
+    }
+
+    // MARK: The list
+
+    private var ruleList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Rules").fontWeight(.semibold)
+                Spacer()
+                Text("alerts in the last 7 days")
+            }
+            .font(.system(size: 12)).foregroundStyle(.secondary).padding(.horizontal, 4)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(center.rules.enumerated()), id: \.element.id) { i, r in
+                        if i > 0 { Divider() }
+                        Button {
+                            if draft != nil, r.kind != selected { setDraft(nil); note = nil }
+                            selected = r.kind
+                        } label: {
+                            HStack(spacing: 10) {
+                                LevelPill(level: r.level).frame(width: 46).opacity(r.enabled ? 1 : 0.35)
+                                Text(r.sentence).foregroundStyle(r.enabled ? Color.primary : Color.secondary)
+                                    .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 6)
+                                Text(countText(r)).font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit().fixedSize()
+                            }
+                            .padding(.horizontal, 12).frame(minHeight: 44).contentShape(Rectangle())
+                            .background(r.kind == selected ? Color.primary.opacity(0.08) : Color.clear)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(r.level.title). \(r.sentence). \(r.enabled ? countText(r) + " in the last 7 days" : "Off").")
+                        .accessibilityAddTraits(r.kind == selected ? .isSelected : [])
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
+                .padding(1)
+            }
+            HStack {
+                Button("Restore the standard rules") { setDraft(nil); center.restoreDefaults() }
+                    .controlSize(.small).disabled(center.rules == AlertRule.defaults)
+                Spacer()
+            }
+        }
+    }
+
+    private func countText(_ r: AlertRule) -> String {
+        guard r.enabled else { return "off" }
+        guard let res = center.replay[r.kind] else { return center.replayLoaded ? "–" : "…" }
+        return !res.hasData ? "no data" : res.count == 0 ? "none" : "\(res.count)×"
+    }
+
+    // MARK: The editor
+
+    private var editor: some View {
+        let r = rule
+        let spec = r.kind.spec
+        return VStack(alignment: .leading, spacing: 14) {
+            if draft != nil {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkle")
+                    Text("Proposed by your AI agent. It is not in use yet.").fontWeight(.semibold)
+                    Spacer()
+                    Button("Drop it") { setDraft(nil); note = nil }
+                    Button("Use this rule") {
+                        if let d = draft { center.update(d) }
+                        setDraft(nil); note = nil; request = ""
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.12)))
+            }
+
+            FlowLayout(spacing: 8) {
+                Text(spec.prefix)
+                if r.value != nil {
+                    Stepper2(text: r.valueText, less: "Lower the value", more: "Raise the value",
+                             onLess: { change(r.stepped(value: -1)) }, onMore: { change(r.stepped(value: 1)) })
+                }
+                if !spec.middle.isEmpty { Text(spec.middle) }
+                Stepper2(text: AlertRule.duration(r.minutes), less: "Shorter time", more: "Longer time",
+                         onLess: { change(r.stepped(minutes: -1)) }, onMore: { change(r.stepped(minutes: 1)) })
+                Text(", open")
+                Button {
+                    var n = r; n.level = r.level == .issue ? .risk : .issue; change(n)
+                } label: {
+                    Text(r.level == .issue ? "an Issue" : "a Risk").fontWeight(.semibold)
+                        .foregroundStyle(r.level == .issue ? Color.white : Color.black)
+                        .padding(.horizontal, 12).frame(height: 30)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(AlertStyle.color(r.level)))
+                }
+                .buttonStyle(.plain)
+                .help("Click to change between a Risk (will cause trouble if it carries on) and an Issue (broken now)")
+                .accessibilityLabel("Opens \(r.level == .issue ? "an Issue" : "a Risk"). Click to change.")
+            }
+            .font(.system(size: 16))
+
+            HStack(spacing: 16) {
+                if spec.perVM { scopeMenu(r) } else {
+                    (Text("Applies to: ").foregroundColor(.secondary) + Text(spec.scope).fontWeight(.semibold)).font(.system(size: 12))
+                }
+                Text(closesText(r)).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Toggle("On", isOn: Binding(get: { r.enabled }, set: { on in var n = r; n.enabled = on; change(n) }))
+                    .toggleStyle(.switch).controlSize(.small)
+                    .accessibilityLabel("Rule is on")
+            }
+
+            replayChart(r)
+
+            if draft == nil, let tip = center.suggestions.first(where: { $0.kind == r.kind }) {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkle")
+                    (Text("Suggested by your AI agent. ").fontWeight(.semibold) + Text(tip.reason))
+                        .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("Not now") { center.dismiss(tip) }
+                    Button(tipLabel(tip, now: r)) {
+                        // Only the numbers the agent proposed; whatever else the user has set on the rule since stays.
+                        var n = r; n.minutes = tip.rule.minutes; n.value = tip.rule.value
+                        center.update(n)
+                    }
+                    .fontWeight(.semibold)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+            }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 16)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
+    }
+
+    private func tipLabel(_ tip: AlertAI.Suggestion, now: AlertRule) -> String {
+        if tip.rule.minutes != now.minutes { return "Use \(AlertRule.duration(tip.rule.minutes))" }
+        return "Use \(tip.rule.valueText)"
+    }
+
+    private func closesText(_ r: AlertRule) -> String {
+        switch r.kind {
+        case .vmStopped: return "Closes as soon as the VM runs again"
+        case .vmDisk, .macDisk: return "Closes by itself once the disk has been back to normal for 10 minutes"
+        default: return "Closes by itself once back to normal for as long as it took to open"
+        }
+    }
+
+    /// Per-VM rules can leave VMs out: a guest that sleeps on purpose, a VM you stop yourself.
+    private func scopeMenu(_ r: AlertRule) -> some View {
+        let vms = model.ring.order.filter { !OtherVMs.isOther(key: $0) }.compactMap { key in model.ring.infos[key].map { (key, $0.name) } }
+        let left = vms.filter { r.excluded.contains($0.0) }
+        let label = left.isEmpty ? "every VM" : "every VM except \(left.map(\.1).joined(separator: ", "))"
+        return HStack(spacing: 4) {
+            Text("Applies to:").font(.system(size: 12)).foregroundStyle(.secondary)
+            Menu {
+                ForEach(vms, id: \.0) { key, name in
+                    Toggle(name, isOn: Binding(get: { !r.excluded.contains(key) }, set: { on in
+                        var n = r
+                        if on { n.excluded.removeAll { $0 == key } } else if !n.excluded.contains(key) { n.excluded.append(key) }
+                        change(n)
+                    }))
+                }
+                if vms.isEmpty { Text("No VM recorded yet") }
+            } label: {
+                Text(label).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .help("Untick a VM to leave it out of this rule")
+        }
+    }
+
+    private func replayChart(_ r: AlertRule) -> some View {
+        let res = result
+        let color = r.level == .issue ? AlertStyle.issue : Color(red: 0.88, green: 0.60, blue: 0.0)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(verdict(res)).fontWeight(.semibold)
+                Spacer(minLength: 8)
+                Text("\(r.kind.spec.chartLabel), last 7 days of your own history").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Canvas { ctx, size in
+                guard let res, res.hasData else { return }
+                let n = CGFloat(max(1, res.bars.count))
+                let w = (size.width - 12) / n
+                for (i, bar) in res.bars.enumerated() {
+                    guard let h = bar.height else { continue }
+                    let height = max(2, CGFloat(min(1, max(0, h))) * (size.height - 6))
+                    let rect = CGRect(x: 6 + CGFloat(i) * w, y: size.height - height, width: max(1, w - 1), height: height)
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(bar.firing ? color : Color.primary.opacity(0.22)))
+                }
+                if let t = res.threshold {
+                    let y = size.height - CGFloat(min(1, max(0, t))) * (size.height - 6)
+                    var line = Path(); line.move(to: CGPoint(x: 0, y: y)); line.addLine(to: CGPoint(x: size.width, y: y))
+                    ctx.stroke(line, with: .color(.primary), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                    let tag = ctx.resolve(Text(r.valueText).font(.system(size: 11, weight: .semibold)).foregroundColor(Color(nsColor: .textBackgroundColor)))
+                    let ts = tag.measure(in: size)
+                    let above = y - ts.height - 6 > 0
+                    let box = CGRect(x: size.width - ts.width - 20, y: above ? y - ts.height - 5 : y + 3, width: ts.width + 12, height: ts.height + 2)
+                    ctx.fill(Path(roundedRect: box, cornerRadius: 5), with: .color(.primary))
+                    ctx.draw(tag, at: CGPoint(x: box.midX, y: box.midY))
+                }
+            }
+            .frame(height: 150)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+            .overlay {
+                if res == nil {
+                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading the last 7 days…").foregroundStyle(.secondary) }
+                } else if res?.hasData == false {
+                    Text("Nothing recorded yet that this rule could be checked against. It is still watched from now on.")
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 40)
+                }
+            }
+            .accessibilityLabel("\(r.kind.spec.chartLabel) over the last 7 days. \(verdict(res))")
+            HStack {
+                Text("7 days ago")
+                Spacer()
+                Text("Coloured bars: the rule would have had an alert open")
+                Spacer()
+                Text("now")
+            }
+            .font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+    }
+
+    private func verdict(_ res: AlertReplay.Result?) -> String {
+        guard let res else { return "Checking this rule against the last 7 days…" }
+        guard res.hasData else { return "No history yet to check this rule against" }
+        if res.count == 0 { return "Set like this, it would not have alerted you in the last 7 days" }
+        return "Set like this, it would have alerted you \(res.count) time\(res.count == 1 ? "" : "s") in the last 7 days"
+    }
+
+    // MARK: Notifications
+
+    private var notificationsCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Notifications").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).padding(.leading, 4)
+            VStack(spacing: 0) {
+                SwitchRow(label: "Notify me about issues", sub: "With the agent's finding once it is ready", isOn: $settings.notifyIssues)
+                Divider()
+                SwitchRow(label: "Notify me about risks", sub: "Off: risks still show in the menu bar and the brief", isOn: $settings.notifyRisks)
+            }
+            .padding(.horizontal, 14)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
+struct SwitchRow: View {
+    let label: String
+    let sub: String
+    @Binding var isOn: Bool
+    var disabled = false
+
+    var body: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                Text(sub).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Toggle(label, isOn: $isOn).labelsHidden().toggleStyle(.switch).controlSize(.small).disabled(disabled)
+        }
+        .frame(minHeight: 54)
+        .opacity(disabled ? 0.55 : 1)
+    }
+}
+
+/// A value with − and + beside it.
+private struct Stepper2: View {
+    let text: String
+    let less: String
+    let more: String
+    let onLess: () -> Void
+    let onMore: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: onLess) { Text("−").frame(width: 30, height: 30).contentShape(Rectangle()) }
+                .buttonStyle(.plain).accessibilityLabel(less)
+            Text(text).fontWeight(.semibold).monospacedDigit().frame(minWidth: 62)
+            Button(action: onMore) { Text("+").frame(width: 30, height: 30).contentShape(Rectangle()) }
+                .buttonStyle(.plain).accessibilityLabel(more)
+        }
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.22)))
+    }
+}
+
+/// Lays its children out left to right and wraps them onto further lines, like words in a sentence.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews, width: proposal.width ?? .infinity)
+        return CGSize(width: proposal.width ?? rows.map(\.width).max() ?? 0, height: rows.last.map { $0.y + $0.height } ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for row in arrange(subviews, width: bounds.width) {
+            for item in row.items {
+                let size = subviews[item.index].sizeThatFits(.unspecified)
+                subviews[item.index].place(at: CGPoint(x: bounds.minX + item.x, y: bounds.minY + row.y + (row.height - size.height) / 2), proposal: .unspecified)
+            }
+        }
+    }
+
+    private struct Row { var y: CGFloat; var height: CGFloat; var width: CGFloat; var items: [(index: Int, x: CGFloat)] }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var row = Row(y: 0, height: 0, width: 0, items: [])
+        for (i, v) in subviews.enumerated() {
+            let size = v.sizeThatFits(.unspecified)
+            if !row.items.isEmpty, row.width + spacing + size.width > width {
+                rows.append(row)
+                row = Row(y: row.y + row.height + spacing, height: 0, width: 0, items: [])
+            }
+            let x = row.items.isEmpty ? 0 : row.width + spacing
+            row.items.append((i, x))
+            row.width = x + size.width
+            row.height = max(row.height, size.height)
+        }
+        if !row.items.isEmpty { rows.append(row) }
+        return rows
+    }
+}
+
+/// Where the AI agent runs, and how it is connected: Claude Code on this Mac, or a model reached with an API key.
+struct AIAgentCard: View {
+    @ObservedObject var settings: AppSettings
+    let agent: AIAgent
+
+    @State private var claudePath: String? = AIAgent.findClaude()
+    @State private var editingCommand = false
+    @State private var key = ""
+    @State private var testing = false
+    @State private var testResult: (ok: Bool, text: String, signIn: Bool)?
+
+    private var sub: String {
+        switch settings.aiBackend {
+        case "cli": return "Runs the Claude Code already on this Mac, on the plan you have."
+        case "key": return "UTM Watch calls the model itself with your key; you pay the provider for each use."
+        default: return "No AI. Rules, the editor and the 7-day check all work without it."
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("AI agent").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).padding(.leading, 4)
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Runs on").fixedSize()
+                        Spacer(minLength: 8)
+                        Picker("Where the AI agent runs", selection: $settings.aiBackend) {
+                            Text("Off").tag("off"); Text("Claude Code").tag("cli"); Text("API key").tag("key")
+                        }
+                        .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    }
+                    Text(sub).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if settings.aiBackend == "cli" { cliBox }
+                    if settings.aiBackend == "key" { keyBox }
+                    if settings.aiBackend != "off" {
+                        Text("What the agent is sent: the alert, and the readings around it with your VMs' names and the names of the busiest processes. It is given no tools and cannot change anything on this Mac.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.vertical, 10)
+                Divider()
+                SwitchRow(label: "Investigate every issue when it opens", sub: "The agent reads the history around it and adds the likely cause to the alert. At most 20 a day.",
+                          isOn: Binding(get: { settings.aiBackend != "off" && settings.aiInvestigate }, set: { settings.aiInvestigate = $0 }),
+                          disabled: settings.aiBackend == "off")
+                Divider()
+                SwitchRow(label: "Suggest better settings", sub: "Once a week, for rules that alert often without anything going wrong",
+                          isOn: Binding(get: { settings.aiBackend != "off" && settings.aiSuggest }, set: { settings.aiSuggest = $0 }),
+                          disabled: settings.aiBackend == "off")
+            }
+            .padding(.horizontal, 14)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .onAppear { key = Keychain.get(settings.aiProvider) ?? "" }
+        .onChange(of: settings.aiBackend) { testResult = nil; claudePath = AIAgent.findClaude() }
+        .onChange(of: settings.aiProvider) { testResult = nil; key = Keychain.get(settings.aiProvider) ?? "" }
+    }
+
+    private func status(_ ok: Bool, _ strong: String, _ rest: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Image(systemName: ok ? "checkmark" : "exclamationmark.triangle.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(ok ? Color.green : Color.orange)
+            (Text(strong).fontWeight(.semibold) + Text(rest.isEmpty ? "" : " " + rest)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        }
+    }
+
+    private var cliBox: some View {
+        let custom = settings.aiCommand.trimmingCharacters(in: .whitespaces)
+        return VStack(alignment: .leading, spacing: 8) {
+            if !custom.isEmpty {
+                status(true, "Using your command.", "It gets the question on standard input and answers on standard output.")
+            } else if let path = claudePath {
+                status(true, "Found.", "Claude Code is at \((path as NSString).abbreviatingWithTildeInPath). Press Test to check that it is signed in.")
+            } else {
+                status(false, "Claude Code is not installed on this Mac.", "")
+                HStack(spacing: 8) {
+                    Link("How to install Claude Code", destination: URL(string: "https://claude.com/claude-code")!)
+                    Button("Look again") { claudePath = AIAgent.findClaude() }.controlSize(.small)
+                }
+            }
+            if let r = testResult {
+                status(r.ok, r.ok ? "Connected." : "Not working.", r.ok ? "It answered." : r.text)
+                if r.signIn {
+                    Button("Open Terminal to sign in") { AIAgent.openClaudeInTerminal() }.controlSize(.small)
+                        .help("Opens Claude Code in Terminal. Sign in there once, quit it, then press Test again.")
+                }
+            }
+            Text("UTM Watch finds Claude Code by itself and hands it this Mac's readings each time it asks. There is nothing to set up in Claude Code.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if editingCommand || !custom.isEmpty {
+                TextField("Command, e.g. ollama run llama3", text: $settings.aiCommand)
+                    .textFieldStyle(.roundedBorder).font(.system(size: 12, design: .monospaced))
+                    .accessibilityLabel("Command to run instead of Claude Code")
+                Text("Runs in your login shell. Leave it empty to use Claude Code.").foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                testButton
+                if !editingCommand, custom.isEmpty { Button("Use another command…") { editingCommand = true } }
+            }
+            .controlSize(.small)
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+    }
+
+    private var keyBox: some View {
+        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+            GridRow {
+                Text("Provider").foregroundStyle(.secondary)
+                Picker("Provider", selection: $settings.aiProvider) {
+                    Text("Anthropic").tag("anthropic"); Text("OpenAI-compatible").tag("openai")
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
+            if settings.aiProvider == "openai" {
+                GridRow {
+                    Text("Address").foregroundStyle(.secondary)
+                    TextField("https://api.openai.com/v1", text: $settings.aiBaseURL).textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Address of the OpenAI-compatible server")
+                }
+            }
+            GridRow {
+                Text("API key").foregroundStyle(.secondary)
+                SecureField(settings.aiProvider == "openai" ? "Leave empty for a model on this Mac" : "sk-ant-…", text: $key)
+                    .textFieldStyle(.roundedBorder)
+                    // Saved as it is typed or pasted: closing the window must not lose it.
+                    .onChange(of: key) { saveKey() }
+                    .accessibilityLabel("API key")
+            }
+            GridRow {
+                Text("Model").foregroundStyle(.secondary)
+                TextField("Model name", text: $settings.aiModel).textFieldStyle(.roundedBorder).accessibilityLabel("Model name")
+            }
+            GridRow {
+                Color.clear.frame(width: 1, height: 1)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) { testButton.controlSize(.small); Text("Kept in the Keychain").foregroundStyle(.secondary).fixedSize() }
+                    if let r = testResult { status(r.ok, r.ok ? "Key works." : "Not working.", r.ok ? "Saved in the Keychain." : r.text) }
+                }
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .onChange(of: settings.aiProvider) {
+            // Each provider has model names of its own; start from a sensible one when the other's is still there.
+            if settings.aiProvider == "anthropic", !settings.aiModel.hasPrefix("claude") { settings.aiModel = "claude-haiku-5-5" }
+            if settings.aiProvider == "openai", settings.aiModel.hasPrefix("claude") { settings.aiModel = "" }
+        }
+    }
+
+    private func saveKey() {
+        let wanted = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard wanted != (Keychain.get(settings.aiProvider) ?? "") else { return }
+        if !Keychain.set(key.trimmingCharacters(in: .whitespacesAndNewlines), for: settings.aiProvider) {
+            testResult = (false, "The Keychain refused to save the key.", false)
+        }
+    }
+
+    private var testButton: some View {
+        Button(testing ? "Testing…" : "Test") {
+            if settings.aiBackend == "key" { saveKey() }
+            testing = true; testResult = nil
+            agent.run("Reply with the single word OK.") { result in
+                testing = false
+                switch result {
+                case .success: testResult = (true, "", false)
+                case .failure(let f): testResult = (false, f.message, f.needsSignIn)
+                }
+            }
+        }
+        .disabled(testing)
+        .help("Asks the agent one short question to check that it answers")
+    }
+}

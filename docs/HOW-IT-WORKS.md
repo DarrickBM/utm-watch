@@ -14,11 +14,25 @@ How UTM Watch measures each VM, finds which process belongs to which VM, and wha
 | Allocatable | total RAM − memory used by macOS and your apps (measured, not a fixed reserve) − configured RAM of all running VMs. VMs can grow to their limit, so limits are counted, not current footprints. | `host_statistics64`, `config.plist` |
 | free now | total RAM − Activity Monitor "Memory Used". Includes file cache that macOS can reclaim. | `host_statistics64` |
 | Cores allocated | Sum of configured CPU counts of running VMs vs physical cores. Over the physical count means VMs compete under full load. | `config.plist`, `hw.ncpu` |
+| Disk free (This Mac) | Room left on the volume your home folder is on, where UTM keeps its VMs unless told otherwise, as Finder shows it (it counts space macOS gives back on demand). VM disk images grow on this disk. Read every 10 seconds. | `URLResourceValues` volume capacity |
 | macOS VMs | Running Apple-backend macOS guests; macOS allows at most two at once. | `config.plist` |
 
 Memory uses binary units (8192 MiB shows as 8 GB, like UTM and Activity Monitor). Network uses decimal units (1 MB/s = 1,000,000 bytes/s), like other network tools.
 
 VM memory tends to climb towards its limit and stay there even when the guest frees memory; that is how the hypervisor works, not a leak.
+
+## Alerts
+
+An alert is one problem from when it began until it is over, not one reading. Each rule is a condition with a time: the alert opens once the condition has lasted that long, stays open while the problem lasts, and closes by itself once things have been normal for as long as it took to open. A **risk** (yellow) will cause trouble if it carries on; an **issue** (red) is broken now.
+
+- CPU and network are averaged over a minute before a rule looks at them, so one idle or busy sample does not restart or trip a rule.
+- "Will be full within a day" compares the disk now with up to 6 hours ago and needs at least an hour of readings; changes under 50 MB an hour are ignored.
+- "Unusual for that VM" means well above the level the VM stayed under 99% of the time in its last 7 days (CPU 30% above, memory 15%, network three times), and needs at least a day of history.
+- "A VM stopped" cannot tell your own shutdown from a failure. Say "I stopped it myself" on the alert, or leave that VM out of the rule in the Alert rules window.
+- Time the Mac spends asleep does not count towards a rule's time.
+- The count beside each rule in the Alert rules window comes from running the same rule over your last 7 days of history. A rule about something that was not recorded then (the Mac's free disk space before this version) says "no data" and is still watched from now on.
+
+The AI agent is off unless you choose one in the Alert rules window. It is sent the alert and about two hours of readings around it, with your VMs' names and the names of the largest processes, and nothing else; it is given no tools. With "Claude Code" this goes to the Claude Code already on this Mac; with "API key" it goes to the provider whose key you entered.
 
 ## How VMs are identified
 

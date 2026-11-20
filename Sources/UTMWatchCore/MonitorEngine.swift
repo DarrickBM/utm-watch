@@ -23,6 +23,8 @@ public final class MonitorEngine {
     private var pidOtherApp: [Int32: String] = [:]        // pid -> app that owns a VM outside UTM
     private var bundles: [String: UTMBundle] = [:]        // bundle path -> config
     private var disks: [String: DiskUsage] = [:]          // bundle path -> how full its disks are
+    private var hostDisk: (free: UInt64, total: UInt64)?  // the Mac's own disk
+    private var hostDiskAt: UInt64 = 0
     private var macToInterface: [String: String] = [:]
     private var utmList: [UTMListedVM]?
     private var utmError: UTMScriptingError?
@@ -291,6 +293,14 @@ public final class MonitorEngine {
                                   swapUsed: host.swapUsed, swapTotal: host.swapTotal, physicalCores: host.physicalCores,
                                   allocatedCores: host.allocatedCores, macOSRunning: host.macOSRunning, macOSLimit: options.macOSLimit)
         summary.hostCPUCores = hostCPU
+        // The Mac's own disk: one cheap call, read every ten seconds. Kept apart from the slow sources, which can
+        // wait on a permission prompt; free space must be known even then.
+        if hostDisk == nil || Double(now &- hostDiskAt) / 1e9 >= 10 {
+            hostDiskAt = now
+            if let d = HostStats.disk() { hostDisk = d }
+        }
+        summary.diskFreeBytes = hostDisk?.free
+        summary.diskTotalBytes = hostDisk?.total
         return Snapshot(timestamp: Date(), intervalSeconds: interval, rows: rows, host: summary, notices: notices)
     }
 

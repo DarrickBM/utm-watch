@@ -24,6 +24,7 @@ struct BriefView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var settings: AppSettings
     @ObservedObject var updater: Updater
+    @ObservedObject var alerts: AlertCenter
     var showsHint: Bool
     @ObservedObject var pointer = BriefPointer()
     /// Called when the content height may have changed (an explanation appeared or went away).
@@ -80,6 +81,9 @@ struct BriefView: View {
                 Text("Live, every \(Int(model.snapshot?.intervalSeconds ?? 2)) s").font(.system(size: 11)).foregroundStyle(.secondary)
             }
 
+            // What needs attention comes first: one line per open alert.
+            if !alerts.open.isEmpty { AlertsAttention(alerts: alerts.open) }
+
             if let snap = model.snapshot {
                 let vms = snap.rows.filter { $0.pid != nil }
                 if vms.isEmpty {
@@ -92,7 +96,9 @@ struct BriefView: View {
                                explanation: $explanation)
                 }
                 Divider()
-                HostBrief(host: snap.host, link: model.link, explanation: $explanation)
+                HostBrief(host: snap.host, link: model.link,
+                          diskAlert: alerts.open.first { $0.rule == AlertKind.macDiskFull.rawValue || $0.rule == AlertKind.macDisk.rawValue },
+                          explanation: $explanation)
                 ForEach(snap.notices, id: \.self) { note in
                     Text(note).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
@@ -102,7 +108,8 @@ struct BriefView: View {
 
             // The explanation area is reserved at the height of the longest explanation that could show,
             // so the panel keeps one size whether or not a value is being hovered.
-            let possible = (model.snapshot.map(Self.explanations) ?? []) + [Explain.link(model.link)].compactMap { $0 }
+            let diskNote = alerts.open.first { $0.rule == AlertKind.macDiskFull.rawValue || $0.rule == AlertKind.macDisk.rawValue }.map { "\($0.what) \($0.todo)" }
+            let possible = (model.snapshot.map(Self.explanations) ?? []) + [Explain.link(model.link), diskNote].compactMap { $0 }
             if !possible.isEmpty {
                 ZStack(alignment: .topLeading) {
                     ForEach(possible, id: \.self) { callout($0).hidden() }
@@ -131,6 +138,7 @@ struct BriefView: View {
             if found != explanation { explanation = found }
         }
         .onChange(of: explanation) { onLayoutChange() }
+        .onChange(of: alerts.open) { onLayoutChange() }
     }
 
     private func callout(_ text: String) -> some View {
@@ -264,6 +272,8 @@ private struct Meter: View {
 private struct HostBrief: View {
     let host: HostSummary
     let link: LinkInfo?
+    /// The open alert about this Mac's disk, if there is one.
+    var diskAlert: Alert? = nil
     @Binding var explanation: String?
 
     private var linkText: String {
@@ -279,6 +289,10 @@ private struct HostBrief: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("This Mac").font(.system(size: 13, weight: .semibold))
+            if let free = host.diskFreeBytes, let total = host.diskTotalBytes {
+                ValueLine(label: "Disk free", value: "\(Format.memory(free)) of \(Format.memory(total))",
+                          explanation: diskAlert.map { "\($0.what) \($0.todo)" }, active: $explanation)
+            }
             ValueLine(label: "Memory pressure", value: host.pressure.rawValue.capitalized,
                       explanation: Explain.pressure(host), active: $explanation)
             ValueLine(label: "Swap used",

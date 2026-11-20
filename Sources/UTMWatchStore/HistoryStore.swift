@@ -47,7 +47,7 @@ public final class HistoryStore {
             try db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             if found != HistoryStore.schemaVersion {
                 // History from an older layout is dropped rather than migrated: it is a few days of samples at most.
-                for t in ["meta", "vm", "vm_config", "sample", "host_sample", "sample_1m", "host_1m", "event", "probe", "probe_1m", "link_sample"] {
+                for t in ["meta", "vm", "vm_config", "sample", "host_sample", "sample_1m", "host_1m", "event", "probe", "probe_1m", "link_sample", "host_disk", "host_disk_1m"] {
                     try db.exec("DROP TABLE IF EXISTS \(t)")
                 }
                 if found != 0 { FileLog.shared.log("history schema changed (\(found) -> \(HistoryStore.schemaVersion)); old history dropped") }
@@ -61,6 +61,13 @@ public final class HistoryStore {
                 try addColumnIfMissing(table: table, column: "disk_used", type: "REAL")
                 try addColumnIfMissing(table: table, column: "disk_size", type: "REAL")
             }
+            // The Mac's own disk space has tables of its own, so a copy of the app from before it was measured can
+            // still write the tables it knows.
+            try db.exec("""
+            CREATE TABLE IF NOT EXISTS host_disk(ts INTEGER PRIMARY KEY, free REAL, total REAL) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS host_disk_1m(minute INTEGER PRIMARY KEY, free REAL, total REAL) WITHOUT ROWID;
+            """)
+            try createAlertTable()
             try db.exec("PRAGMA user_version = \(HistoryStore.schemaVersion)")
         }
         try loadCaches()
@@ -122,6 +129,7 @@ public final class HistoryStore {
                 try db.exec("BEGIN")
                 let insSample = try db.prepare("INSERT OR REPLACE INTO sample VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
                 let insHost = try db.prepare("INSERT OR REPLACE INTO host_sample VALUES(?,?,?,?,?,?,?,?,?)")
+                let insDisk = try db.prepare("INSERT OR REPLACE INTO host_disk VALUES(?,?,?)")
                 let insProbe = try db.prepare("INSERT OR REPLACE INTO probe VALUES(?,?,?,?)")
                 let insLink = try db.prepare("INSERT OR REPLACE INTO link_sample VALUES(?,?,?,?,?,?,?,?)")
                 let insConfig = try db.prepare("INSERT OR REPLACE INTO vm_config VALUES(?,?,?,?)")
@@ -144,6 +152,7 @@ public final class HistoryStore {
                     let h = HostPoint(snapshot: snap)
                     insHost.bind(1, h.t).bind(2, h.used).bind(3, h.other).bind(4, h.allocatable).bind(5, Int64(h.pressure))
                         .bind(6, h.swapUsed).bind(7, h.swapTotal).bind(8, Int64(h.cores)).bind(9, h.cpu).run()
+                    if let free = h.diskFree { insDisk.bind(1, h.t).bind(2, free).bind(3, h.diskTotal).run() }
                 }
                 for e in events { insEvent.bind(1, e.ts).bind(2, e.kind).bind(3, e.vmKey).bind(4, e.label).bind(5, e.detail).run() }
                 for p in probes {
@@ -244,10 +253,10 @@ public final class HistoryStore {
         queue.sync {
             do {
                 try db.exec("BEGIN")
-                for table in ["sample", "host_sample", "event", "probe", "link_sample"] {
+                for table in ["sample", "host_sample", "event", "probe", "link_sample", "host_disk"] {
                     try db.prepare("DELETE FROM \(table) WHERE ts < ?").bind(1, cutoff).run()
                 }
-                for table in ["sample_1m", "host_1m", "probe_1m"] {
+                for table in ["sample_1m", "host_1m", "probe_1m", "host_disk_1m"] {
                     try db.prepare("DELETE FROM \(table) WHERE minute < ?").bind(1, cutoff / 60000).run()
                 }
                 try db.exec("COMMIT")
@@ -262,7 +271,7 @@ public final class HistoryStore {
     public func clear() {
         queue.sync {
             do {
-                try db.exec("DELETE FROM sample; DELETE FROM host_sample; DELETE FROM sample_1m; DELETE FROM host_1m; DELETE FROM event; DELETE FROM vm_config; DELETE FROM vm; DELETE FROM meta; DELETE FROM probe; DELETE FROM probe_1m; DELETE FROM link_sample;")
+                try db.exec("DELETE FROM sample; DELETE FROM host_sample; DELETE FROM sample_1m; DELETE FROM host_1m; DELETE FROM event; DELETE FROM vm_config; DELETE FROM vm; DELETE FROM meta; DELETE FROM probe; DELETE FROM probe_1m; DELETE FROM link_sample; DELETE FROM host_disk; DELETE FROM host_disk_1m;")
                 try db.exec("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
                 try loadCaches()
             } catch {

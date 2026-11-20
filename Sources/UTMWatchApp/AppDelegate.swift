@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: StatusItemController!
     private var detailWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var alertRulesWindow: NSWindow?
     private var cancellables: Set<AnyCancellable> = []
     private var detail: DetailModel!
     private var pruneTimer: Timer?
@@ -50,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// A menu bar app has no Dock icon. While one of its windows is open it takes one, so the window can be found
     /// again from the Dock and with ⌘Tab; with the last window closed it goes back to the menu bar alone.
     private func updateDockPresence() {
-        let open = [detailWindow, settingsWindow, fleetWindow].contains { $0?.isVisible == true }
+        let open = [detailWindow, settingsWindow, fleetWindow, alertRulesWindow].contains { $0?.isVisible == true }
         let wanted: NSApplication.ActivationPolicy = open ? .regular : .accessory
         guard NSApp.activationPolicy() != wanted else { return }
         NSApp.setActivationPolicy(wanted)
@@ -73,6 +74,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.onOpenDetails = { [weak self] in self?.showDetails() }
         statusItem.onOpenSettings = { [weak self] in self?.showSettings() }
         statusItem.onOpenFleet = { [weak self] in self?.showFleet() }
+        statusItem.onOpenAlertRules = { [weak self] in self?.showAlertRules() }
+        // Debug aid: `--demo-alerts` shows example alerts on every surface. Nothing is stored or sent.
+        if CommandLine.arguments.contains("--demo-alerts") { model.alerts.showDemo() }
+        // A click on a notification opens the detail window at the moment the alert began.
+        model.alerts.onShow = { [weak self] ms in
+            self?.showDetails()
+            self?.detail.show(moment: ms)
+        }
         statusItem.offersFleet = { [weak self] in self?.fleet.offersFleetWindow ?? true }
         model.attachStore()
         // Fleet: does nothing unless this Mac has joined a fleet or hosts a hub.
@@ -91,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let t = Timer(timeInterval: 3600, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.prune(days: self.settings.retentionDays)
+            self.model.alerts.hourly()
         }
         t.tolerance = 300
         RunLoop.main.add(t, forMode: .common)
@@ -111,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         runDebugSnapshotIfRequested()
         runDebugViewSnapshots()
         runDebugFleetSnapshot()
+        runDebugAlertRulesSnapshot()
         runDebugEditKeyCheck()
         updater.start()
         // Debug aid: `--update-now` installs a newer release without a click, so the update path can be tested.
@@ -135,9 +146,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let k = args.firstIndex(of: "--snapshot-size"), k + 2 < args.count, let w = Double(args[k + 1]), let h = Double(args[k + 2]) {
             detailWindow?.setContentSize(NSSize(width: w, height: h))
         }
+        if args.contains("--snapshot-alerts") { detail.showAlerts = true }
         if args.contains("--snapshot-pin") { detail.pin = Date().addingTimeInterval(-Double(detail.lengthSeconds) / 3) }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let view = self?.detailWindow?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            FileLog.shared.log("snapshot written to \(path)")
+        }
+    }
+
+    /// Debug aid: `--snapshot-alert-rules <png>` opens the Alert rules window and writes a picture of it after `--snapshot-delay` seconds.
+    /// `--alert-rule <kind>` selects a rule first; `--ai-backend off|cli|key` shows that setup without saving the choice.
+    private func runDebugAlertRulesSnapshot() {
+        let args = CommandLine.arguments
+        func value(_ flag: String) -> String? { args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+        guard let path = value("--snapshot-alert-rules") else { return }
+        let delay = value("--snapshot-delay").flatMap(Double.init) ?? 8
+        if let kind = value("--alert-rule").flatMap(AlertKind.init(rawValue:)) { AlertRulesView.initialKind = kind }
+        // For this run only: the choice is not saved, so a trial copy cannot change the real setting.
+        if let backend = value("--ai-backend"), ["off", "cli", "key"].contains(backend) { settings.aiChoicePersists = false; settings.aiBackend = backend }
+        if let provider = value("--ai-provider"), ["anthropic", "openai"].contains(provider) { settings.aiChoicePersists = false; settings.aiProvider = provider }
+        showAlertRules()
+        if let k = args.firstIndex(of: "--snapshot-size"), k + 2 < args.count, let w = Double(args[k + 1]), let h = Double(args[k + 2]) {
+            alertRulesWindow?.setContentSize(NSSize(width: w, height: h))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let view = self?.alertRulesWindow?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             FileLog.shared.log("snapshot written to \(path)")
@@ -173,8 +208,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         if let p = path("--snapshot-brief") {
-            capture(BriefView(model: model, settings: settings, updater: updater, showsHint: true)
+            capture(BriefView(model: model, settings: settings, updater: updater, alerts: model.alerts, showsHint: true)
                 .background(Color(nsColor: .windowBackgroundColor)), to: p)
+        }
+        if let p = path("--snapshot-icons") {
+            // The menu bar item's three states, on a light and a dark menu bar.
+            let row = { (dark: Bool) in
+                HStack(spacing: 18) {
+                    ForEach([AlertLevel?.none, .risk, .issue], id: \.self) { level in
+                        HStack(spacing: 5) {
+                            if let icon = StatusItemController.icon(level) {
+                                Image(nsImage: icon).renderingMode(level == nil ? .template : .original)
+                            }
+                            Text("2 VM · 4.2 cores").font(.system(size: 13)).monospacedDigit()
+                        }
+                        .foregroundStyle(dark ? Color.white : Color.black)
+                    }
+                }
+                .padding(.horizontal, 14).frame(height: 26).background(dark ? Color(white: 0.16) : Color(white: 0.93))
+            }
+            capture(VStack(spacing: 0) { row(false); row(true) }, to: p)
+        }
+        if let p = path("--ai-check") {
+            // Debug aid: one real request of each kind through Claude Code, written to a file. For this run only: nothing is saved.
+            settings.aiChoicePersists = false
+            settings.aiBackend = "cli"; settings.aiCommand = path("--ai-command") ?? ""
+            let center = model.alerts
+            var lines: [String] = []
+            center.makeRule(from: "Tell me if any VM uses more than 80% of its CPU for 5 minutes") { [weak self] draft in
+                lines.append("rule: \(draft)")
+                guard let store = self?.model.store else { return }
+                let now = Date().msSince1970
+                let alert = Alert(rule: "memory", level: .risk, subject: "host", vmKey: nil, title: "Memory is short",
+                                  what: "Memory pressure has stayed at Warning.", todo: "", opened: now - 60_000)
+                let h = store.load(from: now - 2 * 3600_000, to: now, maxPoints: 26)
+                let prompt = AlertAI.investigatePrompt(evidence: AlertAI.evidence(for: alert, history: h, others: []))
+                center.agent.run(prompt) { result in
+                    lines.append("prompt:\n\(prompt)\n\nfinding: \(result)")
+                    try? lines.joined(separator: "\n\n").write(toFile: p, atomically: true, encoding: .utf8)
+                }
+            }
         }
         if let p = path("--snapshot-settings") {
             SettingsView.snapshotHeight = path("--snapshot-height").flatMap(Double.init).map { CGFloat($0) }
@@ -203,7 +276,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             w.isReleasedWhenClosed = false
             w.delegate = self
             w.contentView = NSHostingView(rootView: DetailView(model: model, settings: settings, detail: detail,
-                                                               onSettings: { [weak self] in self?.showSettings() }))
+                                                               onSettings: { [weak self] in self?.showSettings() },
+                                                               alerts: model.alerts, onAlertRules: { [weak self] in self?.showAlertRules() }))
             w.contentMinSize = NSSize(width: 1180, height: 800)
             w.center()
             w.setFrameAutosaveName("UTMWatchDetail")
@@ -217,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 switch event.keyCode {
                 case 123: self.detail.stepPin(samples: many ? -10 : -1); return nil
                 case 124: self.detail.stepPin(samples: many ? 10 : 1); return nil
+                case 53 where self.detail.showAlerts: self.detail.showAlerts = false; return nil
                 case 53 where self.detail.pin != nil: self.detail.pin = nil; return nil
                 default: return event
                 }
@@ -338,6 +413,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    private func showAlertRules() {
+        if alertRulesWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 800),
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            w.title = "Alert rules"
+            w.isReleasedWhenClosed = false
+            w.delegate = self
+            w.contentView = NSHostingView(rootView: AlertRulesView(center: model.alerts, settings: settings, model: model))
+            w.contentMinSize = NSSize(width: 1180, height: 760)
+            w.center()
+            w.setFrameAutosaveName("UTMWatchAlertRules")
+            alertRulesWindow = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        alertRulesWindow?.makeKeyAndOrderFront(nil)
+        updateDockPresence()
+    }
+
     private func showSettings() {
         if settingsWindow == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 600),
@@ -349,7 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self?.model.clearHistory()
                 self?.detail.refresh(force: true)
                 self?.detail.refreshStats()
-            }, onOpenFleet: { [weak self] in self?.showFleet() }))
+            }, onOpenFleet: { [weak self] in self?.showFleet() }, onOpenAlertRules: { [weak self] in self?.showAlertRules() }))
             w.setContentSize(w.contentView?.fittingSize ?? w.frame.size)
             w.center()
             settingsWindow = w

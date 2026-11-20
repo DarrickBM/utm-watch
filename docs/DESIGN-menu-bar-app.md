@@ -141,6 +141,8 @@ Matches artboards 2 and 3 of the prototype.
 
 Decided 2026-11-10: no configurable alert rules and no model inside the app. The app records what happened; an AI agent the user already has (for example Claude) reads that record through MCP and works out the cause.
 
+Changed 2026-11-20 (Darrick): the app now has alerts with rules the user can change, and can ask an AI agent itself. See 4.7. The app still contains no model: it runs an agent the user already has, or calls one with the user's own key.
+
 **In the app**
 
 - `EventDetector` (built) logs VM starts and stops, memory pressure changes, swap crossing 80%, and a VM held above 90% of its cores for 60 s. Events show on the Events track and turn the menu bar item to its warning state while one is active.
@@ -210,6 +212,46 @@ Cost: about 10 small packets a minute per VM plus 18 a minute for the path; negl
 - Permission status is checked, not assumed: Automation by attempting the UTM query, container access by attempting to read a `config.plist`. Denied states degrade exactly as the TUI does.
 - Quit flushes the pending batch, closes the store, and exits.
 
+### 4.7 Alerts (added 2026-11-20)
+
+Why: the trouble seen in practice was a disk filling up until a VM stopped, and nobody was told. The warning state of the menu bar item marked single readings; it did not say what was wrong, and nothing reached the user who was not looking.
+
+**Model.** An alert is one problem from when it began until it is over. It opens once the rule's condition has lasted its time, stays open while the problem lasts, and closes by itself once things have been normal for as long as it took to open. Two levels: a **risk** will break something if it carries on; an **issue** is broken now. A risk is not shown while the issue that outranks it is open for the same subject (disk nearly full and disk full).
+
+**Rules** (`AlertRules.swift`). One rule per kind, 13 kinds, each a sentence with a threshold and a time the user changes in place, a level, an on switch and, for per-VM rules, VMs it leaves out. Stored in `alert-rules.json` beside the history database.
+
+| Kind | Default | Level |
+|---|---|---|
+| `cpu` | a VM uses more than 90% of its cores for 10 min | risk |
+| `vm_disk` | a VM's disk is more than 90% full, or will be full within 1 day | risk |
+| `mac_disk` | this Mac has less than 20 GB free, or will run out within 1 day | risk |
+| `memory` | memory pressure at Warning for 10 min | risk |
+| `wifi` | Wi-Fi below −75 dBm for 2 min | risk |
+| `unusual` | a VM's CPU, memory or network far above its own last 7 days, for 15 min | risk |
+| `vm_stopped` | a VM stops and has not started again within 1 min | issue |
+| `vm_frozen` | a running VM gives no ping reply for 1 min | issue |
+| `vm_disk_full` | a VM's disk more than 97% full for 1 min | issue |
+| `mac_disk_full` | this Mac has less than 5 GB free for 1 min | issue |
+| `memory_critical` | memory pressure at Critical for 1 min | issue |
+| `network_down` | no network, or neither router nor internet answers, for 1 min | issue |
+| `poor_connection` | more than 10% of pings to the router or internet lost over 5 min | issue |
+
+A VM counts as frozen only if it has answered a ping since it started: a guest whose firewall drops pings never raises this. In the same way a router that never answers pings is left out of the poor-connection rule. A VM that is no longer listed at all loses its disk alerts at once and its "stopped" alert after a day.
+
+A deliberate shutdown cannot be told from an accidental one, so every stop that lasts is an issue; "I stopped it myself" closes it until the VM has run again, and a VM can be left out of the rule.
+
+**New measurement.** Free space on the Mac's own disk (the volume of the home folder, the figure Finder shows), read every 10 s, recorded in tables of its own (`host_disk`, `host_disk_1m`) so that an older copy of the app can still write the tables it knows. VM disk images grow on it. It is not sent to a fleet's hub yet.
+
+**Engine** (`AlertEngine.swift`, in `UTMWatchStore`). A pure state machine fed with samples and probe rounds. CPU and network readings are averaged over a minute before they are compared, so the live engine and the replay (which reads 1-minute rollups) agree. Disk forecasts use the change over up to 6 hours and need at least 1 hour. A gap in the readings (sleep) resets waits that were half counted. Open alerts are restored at launch.
+
+**Replay** (`AlertReplay.swift`). The same engine run over the last 7 days of recorded history says how often a rule would have alerted with the numbers the user is trying, before it goes live. The Alert rules window shows the count and a chart for every rule.
+
+**Storage.** Table `alert` in the history database (added in place; the schema version is unchanged). Openings and endings also go on the timeline as `alert_risk`, `alert_issue` and `alert_end` events; `alert_issue` reaches other Macs of a fleet as a notification.
+
+**Where alerts show.** The menu bar item has three states (clear, yellow mark for a risk, red mark for an issue). The hover brief lists open alerts first and has a "Disk free" line. The detail window has an Alerts list that slides over the right 440 points of the tracks: open alerts with what to do, "Show on timeline", "Mute for a day" or "I stopped it myself", and the alerts that ended in the last 7 days. One macOS notification when an alert opens, per level switchable; clicking it opens the detail window at that moment.
+
+**AI agent** (`AlertAI.swift` for the words, `AIAgent.swift` for running them). Off by default. "Claude Code" runs the `claude` command found on the Mac (`claude -p --tools "" --strict-mcp-config --no-session-persistence`, prompt on standard input, in an empty folder); another command can be given instead. "API key" calls Anthropic's Messages API or any OpenAI-compatible server; the key is kept in the Keychain. The agent is given no tools: everything it may use is in the prompt, marked as data. Three jobs: turn a sentence into a rule (the user checks it against last week and accepts it), look into each issue when it opens and attach the likely cause (at most 20 a day), and once a week suggest better numbers for rules that alert often for problems that end by themselves. What is sent: the alert, and about two hours of readings with VM names and the names of the largest processes.
+
 ## 5. Performance design
 
 Budgets come from the PRD: under 1% of one core on average, under 80 MB, first data within 3 seconds, no growth over time.
@@ -239,7 +281,7 @@ Verification: the same soak used for the TUI (one hour, sampled every 5 minutes)
 |---|---|---|---|
 | T1 | Hover on a status item | Resolved in the A0 spike: tracking areas do not work on macOS 26, pointer polling does | Keep the polling approach; re-test after macOS updates |
 | T2 | Stable signing identity | Repeated permission prompts | Apple Development certificate from Xcode (decided). Needs Xcode installed and an Apple ID added in Xcode's Accounts settings |
-| T3 | Notifications | Dropped from the first version in favour of the menu bar warning state and MCP diagnosis | Revisit if the warning state proves too easy to miss |
+| T3 | Notifications | Dropped from the first version in favour of the menu bar warning state and MCP diagnosis | Added 2026-11-20 with alerts (4.7): one notification when an alert opens |
 | T4 | Store size and query speed at 30 days are estimates | Disk use, slow 7-day view | Measure with generated data before enabling the 30-day option |
 | T5 | Bridged-network VMs and non-UTM VM names | Missing network columns | Unchanged from the PRD: out of scope for this version |
 

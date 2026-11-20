@@ -3,6 +3,7 @@ import Combine
 import SwiftUI
 import UserNotifications
 import UTMWatchCore
+import UTMWatchStore
 
 /// Menu bar item: live title, hover brief, left click = details, right click = menu.
 final class StatusItemController: NSObject {
@@ -26,7 +27,9 @@ final class StatusItemController: NSObject {
     private let closeDelay: TimeInterval = 0.25
     private var hoverTimer: Timer?
     private var pointerInside = false
-    private var showingWarning = false
+    private var shownLevel: AlertLevel?
+    private var alertCancellable: AnyCancellable?
+    var onOpenAlertRules: (() -> Void)?
     private let briefPointer = BriefPointer()
     private var lastLoggedFrame: NSRect = .zero
 
@@ -52,17 +55,22 @@ final class StatusItemController: NSObject {
         cancellable = model.$snapshot.receive(on: RunLoop.main).sink { [weak self] _ in
             guard let self, let button = self.item.button else { return }
             self.applyTitle()
-            let warn = self.model.hasWarning
-            if warn != self.showingWarning {
-                self.showingWarning = warn
-                button.image = NSImage(systemSymbolName: warn ? "exclamationmark.triangle.fill" : "macwindow.on.rectangle",
-                                       accessibilityDescription: warn ? "UTM Watch, warning" : "UTM Watch")
-            }
             if self.panel != nil { DispatchQueue.main.async { self.resizePanel() } } // rows may have appeared or gone
             if self.debug, let w = button.window, w.frame != self.lastLoggedFrame {
                 self.lastLoggedFrame = w.frame
                 FileLog.shared.log("status item frame \(w.frame) screen \(w.screen?.frame ?? .zero) visible \(w.isVisible) occlusion \(w.occlusionState.contains(.visible))")
             }
+        }
+
+        // Three states: all clear, a risk is open (yellow mark), an issue is open (red mark).
+        alertCancellable = model.alerts.$open.receive(on: RunLoop.main).sink { [weak self] _ in
+            guard let self, let button = self.item.button else { return }
+            let level = self.model.alerts.level
+            if level != self.shownLevel {
+                self.shownLevel = level
+                button.image = StatusItemController.icon(level)
+            }
+            if self.panel != nil { DispatchQueue.main.async { self.resizePanel() } }
         }
 
         updateCancellable = updater.$state.receive(on: RunLoop.main).sink { [weak self] _ in
@@ -74,6 +82,18 @@ final class StatusItemController: NSObject {
     }
 
     private var shownTitle: String?
+
+    /// The item's picture. The marks carry their own colour, so they read the same on any menu bar.
+    static func icon(_ level: AlertLevel?) -> NSImage? {
+        guard let level else { return NSImage(systemSymbolName: "macwindow.on.rectangle", accessibilityDescription: "UTM Watch") }
+        let colors: [NSColor] = level == .issue ? [.white, NSColor(red: 0.78, green: 0.06, blue: 0.18, alpha: 1)]
+                                                 : [.black, NSColor(red: 0.98, green: 0.70, blue: 0.10, alpha: 1)]
+        let image = NSImage(systemSymbolName: "exclamationmark.triangle.fill",
+                            accessibilityDescription: level == .issue ? "UTM Watch, an issue is open" : "UTM Watch, a risk is open")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: colors))
+        image?.isTemplate = false
+        return image
+    }
 
     /// The live text, followed by a blue arrow while a newer version is waiting. Touches AppKit only when the text changes.
     private func applyTitle() {
@@ -126,6 +146,7 @@ final class StatusItemController: NSObject {
         if offersFleet?() ?? true {
             menu.addItem(withTitle: "Open Fleet", action: #selector(openFleet), keyEquivalent: "").target = self
         }
+        menu.addItem(withTitle: "Alert Rules…", action: #selector(openAlertRules), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         if updater.currentVersion != nil {
             menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
@@ -144,6 +165,7 @@ final class StatusItemController: NSObject {
     @objc private func installUpdate() { updater.install() }
     @objc private func checkForUpdates() { updater.checkManually() }
     @objc private func openSettings() { onOpenSettings?() }
+    @objc private func openAlertRules() { onOpenAlertRules?() }
 
     @objc private func testNotification() {
         let center = UNUserNotificationCenter.current()
@@ -208,7 +230,7 @@ final class StatusItemController: NSObject {
 
     private func openPanel() {
         guard panel == nil, let buttonWindow = item.button?.window else { return }
-        let host = FirstClickHostingView(rootView: BriefView(model: model, settings: settings, updater: updater, showsHint: true, pointer: briefPointer, onLayoutChange: { [weak self] in
+        let host = FirstClickHostingView(rootView: BriefView(model: model, settings: settings, updater: updater, alerts: model.alerts, showsHint: true, pointer: briefPointer, onLayoutChange: { [weak self] in
             DispatchQueue.main.async { self?.resizePanel() }
         }))
         let size = host.fittingSize

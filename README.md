@@ -81,6 +81,14 @@ xattr -dr com.apple.quarantine /Applications/UTMWatch.app
 
 History is stored in `~/Library/Application Support/UTM Watch/history.sqlite`.
 
+## Alerts
+
+UTM Watch tells you about **risks** (something will break if it carries on: a disk filling up, memory short, a VM at its CPU limit, weak Wi-Fi) and **issues** (something is broken now: a VM stopped or stopped answering, a disk full, the network down or poor). An alert opens once, stays while the problem lasts and closes by itself. It shows as a yellow or red mark in the menu bar, at the top of the hover brief, in the Alerts list of the detail window, and as one macOS notification.
+
+Every rule is a sentence whose numbers you change in the **Alert rules** window (right-click the menu bar item). The window replays each rule over your last 7 days and says how often it would have alerted you, before you rely on it.
+
+An AI agent is optional and off by default. Switched on, it can write a rule from a sentence, look into each issue and add the likely cause to the alert, and suggest better numbers for rules that alert too often. It runs on the Claude Code already on your Mac, another command of your choice, or a model reached with your own API key (Anthropic, or any OpenAI-compatible server, including one on your Mac). The key is kept in the Keychain.
+
 ## AI diagnosis with an MCP server
 
 The app bundle contains `utmwatch-mcp`, a read-only [Model Context Protocol](https://modelcontextprotocol.io) server over standard input/output. An agent on this Mac can use it to read the recorded history and work out why a VM was slow. Connect Claude Code with:
@@ -101,6 +109,8 @@ Then ask, for example: "A user says connecting to one of my VMs is sometimes slo
 | `get_metrics` | One metric over time for a VM, the Mac or the network. |
 | `list_events` | VM starts and stops, memory pressure and swap, VMs at their CPU limit, Wi-Fi and link changes, sleep and wake. |
 | `get_status` | The latest sample: every VM, the Mac and the network now. |
+| `list_alerts` | The alerts open now and those that ended lately, with what an AI agent found. |
+| `list_alert_rules` | The alert rules as you have set them. |
 | `list_macs` | Every Mac in the fleet (on a Mac that has joined one). |
 
 Access can be switched off in the app's Settings under AI diagnosis.

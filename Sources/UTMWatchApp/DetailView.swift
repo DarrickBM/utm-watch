@@ -9,6 +9,9 @@ struct DetailView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var detail: DetailModel
     var onSettings: () -> Void
+    /// This Mac's alerts; nil when the window shows another Mac.
+    var alerts: AlertCenter? = nil
+    var onAlertRules: () -> Void = {}
     /// Set when the window shows another Mac of the fleet instead of this one.
     var remote: RemoteMac? = nil
 
@@ -65,6 +68,18 @@ struct DetailView: View {
             .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 10)
             // White content between the grey toolbar and footer, as in the design.
             .background(Color(nsColor: .textBackgroundColor))
+            // The Alerts list slides over the right side; the tracks keep their width. A click beside it closes it.
+            .overlay(alignment: .trailing) {
+                if detail.showAlerts, remote == nil, let alerts {
+                    ZStack(alignment: .trailing) {
+                        Color.black.opacity(0.001).contentShape(Rectangle()).onTapGesture { detail.showAlerts = false }
+                            .accessibilityHidden(true)
+                        AlertsPanel(center: alerts, onShow: { detail.show(moment: $0) }, onRules: onAlertRules, onClose: { detail.showAlerts = false })
+                    }
+                    .transition(.move(edge: .trailing))
+                }
+            }
+            .clipped()
             Divider()
             footer
         }
@@ -114,6 +129,9 @@ struct DetailView: View {
             } else {
                 // The header below names the moment being shown; here the button is enough at the minimum width.
                 Button("Back to live") { detail.goLive() }.buttonStyle(.borderedProminent)
+            }
+            if remote == nil, let alerts {
+                AlertsButton(center: alerts, isOn: detail.showAlerts) { detail.showAlerts.toggle() }
             }
             Button { onSettings() } label: { Image(systemName: "slider.horizontal.3") }
                 .help("Settings").accessibilityLabel("Settings")
@@ -370,5 +388,31 @@ struct DetailView: View {
     private static func duration(_ ms: Double) -> String {
         let s = ms / 1000
         return s >= 90 ? "\(Int((s / 60).rounded())) min" : "\(Int(s.rounded())) s"
+    }
+}
+
+/// The toolbar's Alerts button: a bell, and how many alerts are open in the colour of the worst one.
+struct AlertsButton: View {
+    @ObservedObject var center: AlertCenter
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "bell")
+                Text("Alerts")
+                if !center.open.isEmpty, let level = center.level {
+                    Text("\(center.open.count)").font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(level == .issue ? Color.white : Color.black)
+                        .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 18)
+                        .background(Capsule().fill(AlertStyle.color(level)))
+                }
+            }
+        }
+        .fixedSize()
+        .help(isOn ? "Close the Alerts list" : "Show what needs attention now and what ended lately")
+        .accessibilityLabel(center.open.isEmpty ? "Alerts, none open" : "Alerts, \(AlertStyle.counts(center.open)) open")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }

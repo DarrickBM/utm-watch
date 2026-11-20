@@ -33,6 +33,16 @@ public enum HostStats {
         }
     }
 
+    /// Free room and size of the volume the user's home folder is on, where UTM keeps its VMs unless told otherwise.
+    /// "Free" is what Finder shows: it counts space macOS gives back on demand, such as local snapshots.
+    public static func disk(at url: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)) -> (free: UInt64, total: UInt64)? {
+        let keys: Set<URLResourceKey> = [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey, .volumeTotalCapacityKey]
+        guard let v = try? url.resourceValues(forKeys: keys), let total = v.volumeTotalCapacity, total > 0 else { return nil }
+        let important = v.volumeAvailableCapacityForImportantUsage ?? 0
+        let free = important > 0 ? important : Int64(v.volumeAvailableCapacity ?? 0)
+        return (UInt64(max(0, free)), UInt64(total))
+    }
+
     public static func swap() -> (used: UInt64, total: UInt64) {
         var total: UInt64 = 0, used: UInt64 = 0
         guard shim_swap_usage(&total, &used) == 0 else { return (0, 0) }

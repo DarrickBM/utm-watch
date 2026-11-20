@@ -606,5 +606,278 @@ do {
     try? FileManager.default.removeItem(atPath: dir)
 }
 
+// MARK: Alerts
+do {
+    let gbd = 1_073_741_824.0
+    let t0: Int64 = 1_800_000_000_000
+    func vm(_ key: String = "A", running: Bool = true, cpu: Double? = 1, cores: Int? = 4, used: Double? = 30, size: Double? = 64) -> AlertSample.VM {
+        AlertSample.VM(key: key, name: "macOS 26", running: running, cpu: running ? cpu : nil, cores: cores, mem: 6 * gbd, net: 1000,
+                       diskUsed: used.map { $0 * gbd }, diskSize: size.map { $0 * gbd })
+    }
+    func opened(_ c: [AlertChange]) -> [Alert] { c.compactMap { if case .opened(let a) = $0 { return a } else { return nil } } }
+    func closed(_ c: [AlertChange]) -> [String] { c.compactMap { if case .closed(let k, _) = $0 { return k } else { return nil } } }
+
+    // Rules as sentences, and the numbers in them.
+    let cpuRule = AlertKind.cpu.spec.rule
+    check(cpuRule.sentence == "When a VM uses more than 90% of its cores for 10 min", "a rule reads as a sentence")
+    check(AlertKind.vmDisk.spec.rule.sentence == "When a VM's disk is more than 90% full, or will be full within 1 day", "a forecast rule reads as a sentence")
+    check(AlertKind.wifi.spec.rule.valueText == "−75 dBm" && AlertKind.macDisk.spec.rule.valueText == "20 GB", "values carry their units")
+    check(cpuRule.stepped(value: -2).value == 80 && cpuRule.stepped(value: 9).value == 100 && cpuRule.stepped(value: -99).value == 40, "the value steps and stops at its limits")
+    check(cpuRule.stepped(minutes: -1).minutes == 5 && cpuRule.stepped(minutes: 1).minutes == 15 && cpuRule.stepped(minutes: 99).minutes == 1440, "the time steps along round durations")
+    check(AlertRule.defaults.count == AlertKind.allCases.count && AlertRule.merged([AlertRule(kind: .cpu, level: .issue, value: 500, minutes: 5)]).first == AlertRule(kind: .cpu, level: .issue, value: 100, minutes: 5),
+          "stored rules lie over the defaults and stay inside their limits")
+
+    // A VM at its CPU limit: one alert once it has lasted, and it closes by itself.
+    func runCPU(limit: Double, load: Double) -> (opened: [Alert], closedAt: Int64?) {
+        var e = AlertEngine(rules: [AlertRule(kind: .cpu, level: .risk, value: limit, minutes: 10)])
+        var all: [Alert] = [], end: Int64?
+        for i in 0..<1500 {   // 50 minutes of 2 s samples: busy in minutes 5 to 25, with one sample idle at minute 12
+            let minute = Double(i) * 2 / 60
+            let busy = minute >= 5 && minute < 25
+            for c in e.ingest(AlertSample(t: t0 + Int64(i) * 2000, vms: [vm(cpu: busy ? (i == 360 ? 2.0 : load * 4) : 0.4)], pressure: 0)) {
+                if case .opened(let a) = c { all.append(a) }
+                if case .closed(_, let at) = c { end = at }
+            }
+        }
+        return (all, end)
+    }
+    let at90 = runCPU(limit: 90, load: 0.95)
+    check(at90.opened.count == 1 && at90.opened.first?.level == .risk && at90.opened.first?.title == "macOS 26 at its CPU limit", "ten minutes at the CPU limit opens one alert")
+    check(at90.opened.first.map { abs($0.opened - (t0 + 5 * 60_000)) < 90_000 } == true, "the alert is dated from when the problem began")
+    check(at90.closedAt.map { abs($0 - (t0 + 25 * 60_000)) < 90_000 } == true, "it closes by itself once things have been normal as long as it took to open")
+    check(at90.opened.count == 1, "one idle sample does not restart the wait: readings are averaged over a minute")
+    check(runCPU(limit: 90, load: 0.85).opened.isEmpty && runCPU(limit: 80, load: 0.85).opened.count == 1, "a lower threshold catches what a higher one lets pass")
+
+    // A VM that stops: an issue after a minute, with what else was wrong; gone when it runs again.
+    var e = AlertEngine(rules: [AlertKind.vmStopped.spec.rule])
+    var changes: [AlertChange] = []
+    func feed(_ e: inout AlertEngine, seconds: ClosedRange<Int>, running: Bool, free: Double = 200) -> [AlertChange] {
+        var out: [AlertChange] = []
+        for sec in stride(from: seconds.lowerBound, through: seconds.upperBound, by: 2) {
+            out += e.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [vm(running: running)], pressure: 0, diskFree: free * gbd, diskTotal: 926 * gbd))
+        }
+        return out
+    }
+    changes = feed(&e, seconds: 0...60, running: true) + feed(&e, seconds: 62...100, running: false) + feed(&e, seconds: 102...130, running: true)
+    check(changes.isEmpty, "a VM that starts again within the minute raises nothing")
+    changes = feed(&e, seconds: 132...140, running: true, free: 1.2) + feed(&e, seconds: 142...260, running: false, free: 1.2)
+    let stop = opened(changes).first
+    check(opened(changes).count == 1 && stop?.level == .issue && stop?.title == "macOS 26 stopped" && stop?.opened == t0 + 142_000, "a VM that stays stopped is one issue, dated from the stop")
+    check(stop?.what.contains("This Mac's disk had 1.2 GB free at that moment") == true, "the alert says what else was wrong when it stopped")
+    check(e.open.count == 1 && closed(feed(&e, seconds: 262...264, running: true)) == ["vm_stopped|A"] && e.open.isEmpty, "it closes as soon as the VM runs again")
+    _ = feed(&e, seconds: 266...400, running: false)
+    check(e.open.count == 1 && closed(e.acknowledge("vm_stopped|A", at: t0 + 400_000)) == ["vm_stopped|A"], "\"I stopped it myself\" closes the alert")
+    check(feed(&e, seconds: 402...900, running: false).isEmpty, "and it stays quiet while the VM stays stopped")
+    _ = feed(&e, seconds: 902...910, running: true)
+    check(opened(feed(&e, seconds: 912...1000, running: false)).count == 1, "the next stop is a new alert")
+    // A restart of the app while a VM is stopped carries the alert on.
+    var e2 = AlertEngine(rules: [AlertKind.vmStopped.spec.rule])
+    e2.restore(Array(e.open.values))
+    check(feed(&e2, seconds: 2000...2100, running: false).isEmpty && e2.open.count == 1, "an alert open at the last quit carries on, not opened twice")
+    check(closed(feed(&e2, seconds: 2102...2104, running: true)).count == 1, "and still closes when the VM returns")
+
+    // Disks: a threshold, a stronger rule, and a forecast.
+    var d = AlertEngine(rules: [AlertKind.macDisk.spec.rule, AlertKind.macDiskFull.spec.rule, AlertKind.vmDisk.spec.rule, AlertKind.vmDiskFull.spec.rule])
+    var diskChanges: [AlertChange] = []
+    for sec in stride(from: 0, through: 600, by: 10) {
+        diskChanges += d.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [vm(used: 59, size: 64)], pressure: 0, diskFree: 12 * gbd, diskTotal: 926 * gbd))
+    }
+    check(Set(opened(diskChanges).map(\.rule)) == ["mac_disk", "vm_disk"] && opened(diskChanges).allSatisfy { $0.level == .risk }, "a disk past its threshold is a risk, for the Mac and for a VM")
+    check(opened(diskChanges).first { $0.rule == "vm_disk" }?.title == "macOS 26 disk 92% full", "the VM disk alert names how full it is")
+    for sec in stride(from: 610, through: 900, by: 10) {
+        diskChanges += d.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [vm(used: 63, size: 64)], pressure: 0, diskFree: 1.2 * gbd, diskTotal: 926 * gbd))
+    }
+    check(Set(opened(diskChanges).filter { $0.level == .issue }.map(\.rule)) == ["mac_disk_full", "vm_disk_full"], "a full disk is an issue")
+    check(AlertKind.macDisk.escalation == .macDiskFull && AlertKind.vmDisk.escalation == .vmDiskFull && AlertKind.memory.escalation == .memoryCritical, "each risk knows the issue that outranks it")
+    var f = AlertEngine(rules: [AlertKind.macDisk.spec.rule])
+    var forecast: [AlertChange] = []
+    for minute in 0...180 {   // 150 GB free, falling 10 GB an hour: out in about half a day
+        forecast += f.ingest(AlertSample(t: t0 + Int64(minute) * 60_000, vms: [], pressure: 0, diskFree: (150 - Double(minute) / 6) * gbd, diskTotal: 926 * gbd, averaged: true))
+    }
+    check(opened(forecast).count == 1 && opened(forecast).first?.title == "This Mac's disk is filling up" && opened(forecast).first?.what.contains("runs out in about") == true,
+          "a disk on course to fill within a day is a risk before it is low")
+    var steady = AlertEngine(rules: [AlertKind.macDisk.spec.rule])
+    var steadyChanges: [AlertChange] = []
+    for minute in 0...180 { steadyChanges += steady.ingest(AlertSample(t: t0 + Int64(minute) * 60_000, vms: [], pressure: 0, diskFree: 150 * gbd - Double(minute % 7) * 1e6, diskTotal: 926 * gbd, averaged: true)) }
+    check(steadyChanges.isEmpty, "a disk that only breathes raises no forecast")
+
+    // Memory, with a gap: time asleep does not count towards the wait.
+    var m = AlertEngine(rules: [AlertKind.memory.spec.rule])
+    var memChanges: [AlertChange] = []
+    for sec in stride(from: 0, through: 300, by: 2) { memChanges += m.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [], pressure: 1)) }
+    for sec in stride(from: 3600, through: 3900, by: 2) { memChanges += m.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [], pressure: 1)) }
+    check(memChanges.isEmpty, "five minutes before a sleep and five after are not ten minutes of pressure")
+    for sec in stride(from: 3902, through: 4300, by: 2) { memChanges += m.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [], pressure: 1)) }
+    check(opened(memChanges).count == 1 && opened(memChanges).first?.title == "Memory is short", "ten unbroken minutes of memory pressure is a risk")
+    check(closed(m.mute("memory|host", until: t0 + 6000_000, at: t0 + 4300_000)) == ["memory|host"], "muting closes the alert")
+    for sec in stride(from: 4302, through: 5900, by: 2) { memChanges = m.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [], pressure: 1)); if !memChanges.isEmpty { break } }
+    check(memChanges.isEmpty && m.open.isEmpty, "and keeps it quiet until the mute ends")
+
+    // The network.
+    var n = AlertEngine(rules: [AlertKind.wifi.spec.rule, AlertKind.networkDown.spec.rule, AlertKind.poorConnection.spec.rule, AlertKind.vmFrozen.spec.rule])
+    _ = n.ingest(AlertSample(t: t0, vms: [vm()], pressure: 0))
+    var net: [AlertChange] = []
+    func probe(_ i: Int, rssi: Double = -55, kind: String = "wifi", vmLost: Bool = false, gwLost: Bool = false, inetLost: Bool = false) -> AlertProbe {
+        AlertProbe(t: t0 + Int64(i) * 10_000, linkKind: kind, rssi: kind == "wifi" ? rssi : nil, vmPing: ["A": .init(sent: 1, lost: vmLost ? 1 : 0)],
+                   gateway: kind == "none" ? nil : .init(sent: 1, lost: gwLost ? 1 : 0), internet: kind == "none" ? nil : .init(sent: 1, lost: inetLost ? 1 : 0))
+    }
+    for i in 0..<30 { net += n.ingest(probe(i)) }
+    check(net.isEmpty, "a healthy network raises nothing")
+    for i in 30..<50 { net += n.ingest(probe(i, rssi: -80)) }
+    check(opened(net).map(\.rule) == ["wifi"] && opened(net).first?.level == .risk, "two minutes of weak Wi-Fi is a risk")
+    var ended: [String] = []
+    ended += closed(net); net = []
+    for i in 50..<70 { net += n.ingest(probe(i, vmLost: true)) }
+    check(opened(net).map(\.rule) == ["vm_frozen"] && opened(net).first?.title == "macOS 26 is not responding", "a running VM that stops answering pings is an issue")
+    ended += closed(net); net = []
+    for i in 70..<120 { net += n.ingest(probe(i, inetLost: i % 4 == 0)) }
+    check(opened(net).map(\.rule) == ["poor_connection"] && opened(net).first?.what.contains("the internet") == true && opened(net).first?.todo.contains("router answers") == true,
+          "a quarter of pings lost is a poor connection, and the alert says which side")
+    ended += closed(net); net = []
+    for i in 120..<200 { net += n.ingest(probe(i)) }
+    ended += closed(net)
+    check(ended.sorted() == ["poor_connection|host", "vm_frozen|A", "wifi|host"] && n.open.isEmpty, "network alerts close once the network is well again")
+    net = []
+    for i in 200..<220 { net += n.ingest(probe(i, kind: "none")) }
+    check(opened(net).map(\.rule) == ["network_down"], "a minute with no network is one issue, not also a poor connection")
+    n.rules = n.rules.map { var r = $0; if r.kind == .networkDown { r.enabled = false }; return r }
+    check(closed(n.ingest(probe(220, kind: "none"))) == ["network_down|host"], "switching a rule off closes its alert")
+
+    // A guest that never answers pings is not frozen; a router that never answers is not a poor connection.
+    var quiet = AlertEngine(rules: [AlertKind.vmFrozen.spec.rule, AlertKind.poorConnection.spec.rule, AlertKind.networkDown.spec.rule])
+    _ = quiet.ingest(AlertSample(t: t0, vms: [vm()], pressure: 0))
+    var quietChanges: [AlertChange] = []
+    for i in 0..<60 { quietChanges += quiet.ingest(probe(i, vmLost: true, gwLost: true)) }
+    check(quietChanges.isEmpty, "a guest and a router that have never answered a ping raise nothing")
+    for i in 60..<110 { quietChanges += quiet.ingest(probe(i, vmLost: true, gwLost: true, inetLost: i % 3 == 0)) }
+    check(opened(quietChanges).map(\.rule) == ["poor_connection"] && opened(quietChanges).first?.todo.contains("does not answer pings") == true,
+          "internet loss still shows behind a router that never answers pings")
+    quietChanges = []
+    for i in 110..<112 { quietChanges += quiet.ingest(probe(i, gwLost: true)) }
+    for i in 112..<125 { quietChanges += quiet.ingest(probe(i, vmLost: true, gwLost: true)) }
+    check(opened(quietChanges).map(\.rule) == ["vm_frozen"], "once a guest has answered, its silence is an issue")
+
+    // A VM that is no longer listed at all.
+    var gone = AlertEngine(rules: [AlertKind.vmDisk.spec.rule, AlertKind.vmStopped.spec.rule])
+    var goneChanges: [AlertChange] = []
+    for sec in stride(from: 0, through: 300, by: 10) { goneChanges += gone.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [vm(used: 60, size: 64)], pressure: 0)) }
+    check(opened(goneChanges).map(\.rule) == ["vm_disk"], "a nearly full disk opens its alert")
+    goneChanges = []
+    for sec in stride(from: 310, through: 600, by: 10) { goneChanges += gone.ingest(AlertSample(t: t0 + Int64(sec) * 1000, vms: [], pressure: 0)) }
+    check(closed(goneChanges) == ["vm_disk|A"] && opened(goneChanges).map(\.rule) == ["vm_stopped"], "a VM removed from UTM loses its disk alert at once and counts as stopped")
+    goneChanges = []
+    for minute in stride(from: 11, through: 1470, by: 2) { goneChanges += gone.ingest(AlertSample(t: t0 + Int64(minute) * 60_000, vms: [], pressure: 0, averaged: true)) }
+    check(closed(goneChanges) == ["vm_stopped|A"] && gone.open.isEmpty, "and after a day unlisted it is forgotten")
+
+    // History can be handed to the forecast after live readings have begun.
+    var late = AlertEngine(rules: [AlertKind.macDisk.spec.rule])
+    var lateChanges = late.ingest(AlertSample(t: t0 + 180 * 60_000, vms: [], pressure: 0, diskFree: 120 * gbd, diskTotal: 926 * gbd, averaged: true))
+    var past = History(from: t0, to: t0 + 180 * 60_000)
+    past.host = (0..<180).map { HostPoint(t: t0 + Int64($0) * 60_000, used: 0, other: 0, allocatable: 0, pressure: 0, swapUsed: 0, swapTotal: 0, cores: 0, diskFree: (150 - Double($0) / 6) * gbd, diskTotal: 926 * gbd) }
+    late.seedTrend(past)
+    for minute in 181...186 { lateChanges += late.ingest(AlertSample(t: t0 + Int64(minute) * 60_000, vms: [], pressure: 0, diskFree: (150 - Double(minute) / 6) * gbd, diskTotal: 926 * gbd, averaged: true)) }
+    check(opened(lateChanges).first?.title == "This Mac's disk is filling up", "history seeded after the first live reading still feeds the forecast")
+
+    // Something unusual for the VM itself.
+    var u = AlertEngine(rules: [AlertKind.unusual.spec.rule])
+    u.baselines["A"] = AlertBaseline(cpu: 1.0, mem: 6 * gbd, net: 100_000, minutes: 5000)
+    var odd: [AlertChange] = []
+    for minute in 0...20 { odd += u.ingest(AlertSample(t: t0 + Int64(minute) * 60_000, vms: [vm(cpu: 3.2)], pressure: 0, averaged: true)) }
+    check(opened(odd).count == 1 && opened(odd).first?.what.contains("almost never above 1.0") == true, "a VM far above its own usual level is a risk")
+    u.baselines["A"]?.minutes = 600
+    var young = AlertEngine(rules: [AlertKind.unusual.spec.rule])
+    young.baselines["A"] = AlertBaseline(cpu: 1.0, mem: 6 * gbd, net: 100_000, minutes: 600)
+    var youngChanges: [AlertChange] = []
+    for minute in 0...20 { youngChanges += young.ingest(AlertSample(t: t0 + Int64(minute) * 60_000, vms: [vm(cpu: 3.2)], pressure: 0, averaged: true)) }
+    check(youngChanges.isEmpty, "nothing is unusual for a VM with less than a day of history")
+
+    // Replay over recorded history, alert storage, and the Mac's disk in the store.
+    let dir = NSTemporaryDirectory() + "utmwatch-alerts-\(UUID().uuidString)"
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    if let store = try? HistoryStore(path: dir + "/history.sqlite") {
+        let gb: UInt64 = 1_073_741_824
+        var snaps: [Snapshot] = []
+        let start = Date(ms: t0)
+        for i in 0..<1800 {   // an hour: busy in minutes 10 to 35, VM stopped in minutes 45 to 50
+            let minute = i * 2 / 60
+            var rows: [VMRow] = []
+            if !(45..<50).contains(minute) {
+                var a = VMRow(id: "A", name: "macOS 26", backend: .apple, status: .running, pid: 10, identified: true, isMacOS: true,
+                              cpuCores: (10..<35).contains(minute) ? 3.9 : 0.5, cpuAllocated: 4, memoryBytes: 7 * gb, memoryAllocatedBytes: 8 * gb, downRate: 1000, upRate: 500, downTotal: 1, upTotal: 1)
+                a.diskUsedBytes = 50 * gb; a.diskSizeBytes = 64 * gb
+                rows.append(a)
+            }
+            var host = HostSummary(totalMemory: 48 * gb, hostUsed: 30 * gb, hostOtherUsed: 22 * gb, freeNow: 18 * gb, allocatable: 18 * gb, pressure: .normal,
+                                   swapUsed: 0, swapTotal: 4 * gb, physicalCores: 14, allocatedCores: 4, macOSRunning: 1)
+            host.diskFreeBytes = UInt64(252 - minute) * gb; host.diskTotalBytes = 926 * gb
+            snaps.append(Snapshot(timestamp: start.addingTimeInterval(Double(i) * 2), intervalSeconds: 2, rows: rows, host: host, notices: []))
+        }
+        store.write(snapshots: snaps)
+        let h = store.load(from: t0, to: t0 + 3600_000, maxPoints: 60)
+        check(h.host.first?.diskFree == Double(252 * gb) && h.host.first?.diskTotal == Double(926 * gb), "the Mac's free disk space is recorded")
+        let week = store.load(from: t0 - 3 * 3600_000, to: t0 + 3600_000, maxPoints: 240)
+        check(week.host.last?.diskFree.map { $0 < Double(200 * gb) } == true, "and survives the one-minute rollup")
+        // A copy of the app from before disk space was measured writes host samples with nine values; that must still work.
+        let oldCopy = Shell.run("/usr/bin/sqlite3", [dir + "/history.sqlite", "INSERT OR REPLACE INTO host_sample VALUES(1, 1, 1, 1, 0, 0, 0, 4, 1); DELETE FROM host_sample WHERE ts = 1;"])
+        check(oldCopy.status == 0, "an older copy of the app can still write host samples to this database")
+        let tl = AlertReplay.timeline(h)
+        let r90 = AlertReplay.run(AlertRule(kind: .cpu, level: .risk, value: 90, minutes: 10), over: tl)
+        check(r90.count == 1 && r90.hasData && r90.threshold == 0.9 && r90.bars.count == 84 && r90.bars.contains { $0.firing } && r90.bars.first?.firing == false,
+              "replay: the rule would have alerted once, and the chart marks when")
+        check(AlertReplay.run(AlertRule(kind: .cpu, level: .risk, value: 90, minutes: 30), over: tl).count == 0, "replay: waiting longer than the busy spell lasted would not have alerted")
+        check(AlertReplay.run(AlertRule(kind: .cpu, level: .risk, value: 100, minutes: 10), over: tl).count == 0, "replay: nor would a threshold above the load")
+        let stops = AlertReplay.run(AlertKind.vmStopped.spec.rule, over: tl)
+        check(stops.count == 1 && stops.intervals.first.map { abs($0.from - (t0 + 45 * 60_000)) < 90_000 && abs($0.to - (t0 + 50 * 60_000)) < 90_000 } == true, "replay finds the VM's stop and how long it lasted")
+        check(AlertReplay.run(AlertKind.vmStopped.spec.rule.stepped(minutes: 3), over: tl).count == 0, "replay: a stop shorter than the wait would not have alerted")
+        check(!AlertReplay.run(AlertKind.wifi.spec.rule, over: tl).hasData, "replay says when history has nothing to check a rule against")
+        check(AlertReplay.baselines(h)["A"].map { $0.cpu > 3.5 && $0.minutes >= 50 } == true, "a VM's usual level comes from its own history")
+
+        var a = Alert(rule: "vm_stopped", level: .issue, subject: "A", vmKey: "A", title: "macOS 26 stopped", what: "It stopped.", todo: "Start it.", opened: t0)
+        a.id = store.insertAlert(a)
+        var b = Alert(rule: "memory", level: .risk, subject: "host", vmKey: nil, title: "Memory is short", what: "Pressure.", todo: "Close apps.", opened: t0 - 60_000)
+        b.id = store.insertAlert(b)
+        a.finding = "The disk filled."; a.findingAt = t0 + 5000
+        store.updateAlert(a)
+        store.closeAlert(id: b.id, at: t0 + 30_000)
+        let listed = store.alerts(since: t0 - 3600_000)
+        check(a.id > 0 && listed.count == 2 && listed.first?.closed == nil && listed.first?.finding == "The disk filled." && listed.last?.closed == t0 + 30_000, "alerts are stored: open ones first, with what the agent found")
+        store.pruneAlerts(olderThan: t0 + 60_000)
+        check(store.alerts(since: 0).map(\.rule) == ["vm_stopped"], "pruning removes alerts that ended long ago and keeps the open one")
+        if let reader = try? HistoryStore(path: dir + "/history.sqlite", readOnly: true) {
+            check(reader.alerts(since: 0).count == 1, "the read-only helper sees the alerts")
+        } else { check(false, "the store opens read-only") }
+
+        // What the agent is told, and reading what it says back.
+        let evidence = AlertAI.evidence(for: a, history: store.load(from: t0, to: t0 + 3600_000, maxPoints: 12), others: [b])
+        check(evidence.contains("Issue \"macOS 26 stopped\"") && evidence.contains("Mac disk 2") && evidence.contains("macOS 26: CPU") && evidence.contains("macOS 26: not running") && evidence.contains("Memory is short"),
+              "the agent is given the alert, the readings before it and the other open alerts")
+        check(AlertAI.investigatePrompt(evidence: evidence).contains("not instructions"), "the prompt marks the evidence as data")
+    } else { check(false, "alert store opens") }
+
+    let rules = AlertRule.defaults
+    check(AlertAI.rule(from: "Here you go:\n```json\n{\"kind\": \"cpu\", \"value\": 80, \"minutes\": 5, \"level\": \"risk\"}\n```", current: rules)
+            == .rule(AlertRule(kind: .cpu, level: .risk, value: 80, minutes: 5)), "a rule is read from the agent's JSON, fences and all")
+    check(AlertAI.rule(from: "{\"kind\":\"mac_disk\",\"value\":9000,\"minutes\":1000,\"level\":\"issue\"}", current: rules)
+            == .rule(AlertRule(kind: .macDisk, level: .issue, value: 200, minutes: 1440)), "numbers outside a rule's limits are brought inside them")
+    check(AlertAI.rule(from: "{\"error\": \"The rules cannot watch battery level.\"}", current: rules) == .cannot("The rules cannot watch battery level."), "the agent can say a request fits no rule")
+    if case .cannot = AlertAI.rule(from: "I am not sure.", current: rules) {} else { check(false, "an answer with no rule in it is refused") }
+    if case .cannot = AlertAI.rule(from: "{\"kind\":\"rm -rf\"}", current: rules) {} else { check(false, "an unknown kind is refused") }
+    let tips = AlertAI.suggestions(from: "[{\"kind\":\"memory\",\"minutes\":15,\"value\":null,\"reason\":\"Most ended within minutes.\"},{\"kind\":\"cpu\",\"minutes\":10,\"reason\":\"No change.\"},{\"kind\":\"nope\",\"minutes\":1,\"reason\":\"x\"}]", current: rules)
+    check(tips.count == 1 && tips.first?.kind == .memory && tips.first?.rule.minutes == 15 && tips.first?.reason == "Most ended within minutes.", "suggestions keep only real changes to rules that exist")
+    check(AlertAI.finding(from: "**Likely cause:** the disk filled.\n\nFree space first.") == "Likely cause: the disk filled. Free space first." && AlertAI.finding(from: " \n ") == nil, "the agent's finding is tidied into one paragraph")
+    check(AlertAI.rulePrompt(request: "tell me at 80% CPU", current: rules).contains("kind \"cpu\"") && AlertAI.tunePrompt(rules: rules, results: [:]).contains("No rule alerted."), "prompts list the rules")
+
+    let rulesPath = dir + "/alert-rules.json"
+    var custom = AlertRule.defaults
+    custom[0].value = 80; custom[0].excluded = ["A"]; custom[6].enabled = false
+    AlertRulesFile.save(custom, path: rulesPath)
+    check(AlertRulesFile.load(path: rulesPath) == custom, "rules survive being saved and loaded")
+    try? Data(#"[{"kind":"from_the_future","minutes":1},{"kind":"cpu","value":70}]"#.utf8).write(to: URL(fileURLWithPath: rulesPath))
+    let loaded = AlertRulesFile.load(path: rulesPath)
+    check(loaded.count == AlertKind.allCases.count && loaded.first?.value == 70 && loaded.first?.minutes == 10, "an unknown rule in the file is skipped and missing fields take the defaults")
+    check(AlertRulesFile.load(path: dir + "/missing.json") == AlertRule.defaults, "no rules file means the default rules")
+    try? FileManager.default.removeItem(atPath: dir)
+}
+
 print("\(checks - failures)/\(checks) checks passed")
 exit(failures == 0 ? 0 : 1)

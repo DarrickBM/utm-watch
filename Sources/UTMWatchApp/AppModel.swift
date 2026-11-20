@@ -11,9 +11,13 @@ final class AppModel: ObservableObject {
     @Published var link: LinkInfo?
     let ring = LiveRing()
     let settings: AppSettings
+    /// Risks and issues: the rules, what is open now, and what ended lately.
+    let alerts: AlertCenter
 
     init(settings: AppSettings) {
         self.settings = settings
+        alerts = AlertCenter(settings: settings)
+        alerts.onEvents = { [weak self] events in self?.record(events) }
         // @Published fires before the value changes; hop to the next main-loop turn to read the new one.
         otherVMsSetting = settings.$showOtherVMs.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
             guard let self, let full = self.fullSnapshot else { return }
@@ -33,12 +37,6 @@ final class AppModel: ObservableObject {
         return s
     }
 
-    /// True while something is outside its normal range; drives the menu bar warning mark.
-    var hasWarning: Bool {
-        guard let s = snapshot else { return false }
-        return Explain.pressure(s.host) != nil || Explain.swap(s.host) != nil || s.rows.contains { Explain.cpu($0) != nil }
-            || Explain.link(link) != nil
-    }
     private(set) var store: HistoryStore?
     private var recorder: Recorder?
     /// Sends the recorded history to the fleet's hub; nil when this Mac is not in a fleet.
@@ -89,6 +87,7 @@ final class AppModel: ObservableObject {
                 detector.seed(pressure: last.pressure, swapHigh: last.swapTotal > 0 && last.swapUsed / last.swapTotal >= 0.8)
                 detector.seed(diskHigh: Set(recent.series.filter { ($0.value.last?.diskFraction ?? 0) >= 0.9 }.keys))
             }
+            alerts.attach(store: s)
             FileLog.shared.log("history store open at \(s.path), \(s.stats().sampleCount) host samples")
         } catch {
             FileLog.shared.log("history store unavailable, running without recording: \(error)")
@@ -143,6 +142,7 @@ final class AppModel: ObservableObject {
         uploader?.setLive(snapshot: snap)
         snapshot = shown(snap)
         if !urgent.isEmpty { recordWithProcesses(urgent) }
+        alerts.ingest(snap)
     }
 
     /// Called on the main thread for every round of network probes.
@@ -152,6 +152,7 @@ final class AppModel: ObservableObject {
         record(detector.ingest(p))
         uploader?.setLive(link: p.link)
         link = p.link
+        alerts.ingest(p)
     }
 
     func record(_ events: [HistoryEvent]) {
@@ -186,6 +187,7 @@ final class AppModel: ObservableObject {
         recorder?.discardPending()
         store?.clear()
         ring.clear()
+        alerts.clear()
     }
 }
 

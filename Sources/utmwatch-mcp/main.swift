@@ -265,6 +265,7 @@ func momentJSON(_ h: History, at t: Int64, _ src: Source) -> [String: Any] {
             "coresAllocatedToVMs": p.cores, "physicalCores": src.physicalCores,
         ]
         if let cpu = p.cpu { host["cpuCoresBusy"] = r3(cpu) }
+        if let free = p.diskFree, let total = p.diskTotal { host["diskFreeGB"] = r3(free / gib); host["diskTotalGB"] = r3(total / gib) }
         out["host"] = host
     } else {
         out["host"] = "no sample within 30 s of this time: the Mac was asleep or UTM Watch was not running"
@@ -318,8 +319,18 @@ let tools: [[String: Any]] = [
 ]
 
 /// With a fleet to read, every tool takes an optional "mac" and one more tool lists the Macs. Without one, the tools are unchanged.
+/// Alerts and their rules are this Mac's own; they are not sent to a fleet's hub, so these two take no "mac".
+let alertTools: [[String: Any]] = [
+    ["name": "list_alerts",
+     "description": "UTM Watch's own alerts on this Mac: those open now, then those that ended since a given time. An alert is one problem from when it began until it was over, at level \"risk\" (will cause trouble if it carries on: a disk filling up, memory short, a VM at its CPU limit, weak Wi-Fi) or \"issue\" (broken now: a VM stopped or stopped answering, a disk full, memory critical, the network down or poor). Each carries what is wrong, what to do, and the finding of the AI agent that looked into it, if one did.",
+     "inputSchema": ["type": "object", "properties": ["since": ["type": "string", "description": "Also list alerts that ended after this time. Default -7d. " + timeHelp]]]],
+    ["name": "list_alert_rules",
+     "description": "The alert rules on this Mac as the user has set them: each rule as a sentence, its level, threshold, how long the condition must last, whether it is on, and VMs it leaves out. Read-only; the user changes rules in UTM Watch's Alert rules window.",
+     "inputSchema": ["type": "object", "properties": [String: Any]()]],
+]
+
 let offeredTools: [[String: Any]] = {
-    guard fleet != nil else { return tools }
+    guard fleet != nil else { return tools + alertTools }
     var out: [[String: Any]] = [[
         "name": "list_macs",
         "description": "The Macs in this fleet, as of each one's last upload to the hub: name, online or offline, memory pressure and headroom, and its running VMs with CPU and memory. Start here when it is not known which Mac has the problem.",
@@ -333,7 +344,7 @@ let offeredTools: [[String: Any]] = {
         tool["inputSchema"] = schema
         out.append(tool)
     }
-    return out
+    return out + alertTools
 }()
 
 func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
@@ -353,6 +364,32 @@ func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
             }
             return d
         }, "note": "State is as of each Mac's last upload. Pass a Mac's name as \"mac\" to the other tools to look into it."]
+    }
+    if name == "list_alerts" {
+        let store = try openStore()
+        let since = try (args["since"] as? String).map { try parseTime($0, now: now) } ?? now - 7 * 86_400_000
+        let names = Dictionary(store.knownVMs().map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
+        let list = store.alerts(since: since).map { a -> [String: Any] in
+            var d: [String: Any] = ["level": a.level.rawValue, "rule": a.rule, "title": a.title, "what": a.what, "began": iso(a.opened), "state": a.closed == nil ? "open" : "ended"]
+            if !a.todo.isEmpty { d["whatToDo"] = a.todo }
+            if let key = a.vmKey { d["vm"] = names[key] ?? key }
+            if let closed = a.closed { d["ended"] = iso(closed); d["lastedMinutes"] = max(1, Int((closed - a.opened) / 60_000)) }
+            if let f = a.finding { d["aiFinding"] = f }
+            return d
+        }
+        return ["open": list.filter { $0["state"] as? String == "open" }, "ended": list.filter { $0["state"] as? String == "ended" },
+                "note": "Use get_moment or summarize around an alert's \"began\" time to see the readings behind it."]
+    }
+    if name == "list_alert_rules" {
+        _ = try openStore() // the same permission check as every other tool
+        let names = Dictionary(((try? openStore())?.knownVMs() ?? []).map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
+        return ["rules": AlertRulesFile.load().map { r -> [String: Any] in
+            var d: [String: Any] = ["kind": r.kind.rawValue, "sentence": r.sentence, "level": r.level.rawValue, "minutes": r.minutes, "on": r.enabled,
+                                    "appliesTo": r.kind.spec.scope]
+            if let v = r.value { d["value"] = v; d["unit"] = r.kind.spec.unit.trimmingCharacters(in: .whitespaces) }
+            if !r.excluded.isEmpty { d["leavesOut"] = r.excluded.map { names[$0] ?? $0 } }
+            return d
+        }]
     }
     let src = try source(args)
     var result = try runTool(name, args, src, now: now)

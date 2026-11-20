@@ -9,6 +9,7 @@ struct SettingsView: View {
     @ObservedObject var fleet: FleetController
     var onClearData: () -> Void
     var onOpenFleet: () -> Void = {}
+    var onOpenAlertRules: () -> Void = {}
 
     @State private var copied = false
     private var connectCommand: String {
@@ -72,6 +73,23 @@ struct SettingsView: View {
                 Text("Hidden tracks are still recorded, and an AI agent can still read them. Swap warnings still appear on the timeline.")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Section("Alerts") {
+                LabeledContent {
+                    Button("Alert rules…") { onOpenAlertRules() }
+                } label: {
+                    Text("Risks and issues")
+                    Text("What UTM Watch alerts you about, when, and whether an AI agent looks into it")
+                }
+                Toggle(isOn: $settings.notifyIssues) {
+                    Text("Notify me about issues")
+                    Text("Something is broken now: a VM stopped, a disk is full, the network is down")
+                }
+                Toggle(isOn: $settings.notifyRisks) {
+                    Text("Notify me about risks")
+                    Text("Something will break if it carries on: a disk filling up, memory short")
+                }
             }
 
             FleetSettingsSection(fleet: fleet, settings: settings, onOpenFleet: onOpenFleet)

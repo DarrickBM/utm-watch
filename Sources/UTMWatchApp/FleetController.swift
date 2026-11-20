@@ -93,6 +93,8 @@ final class FleetController: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
+        // `UTMWATCH_NO_FLEET=1` keeps a trial copy out of the fleet: no hub, no network helper, nothing sent.
+        if ProcessInfo.processInfo.environment["UTMWATCH_NO_FLEET"] == "1" { return }
         identity = HostIdentity.load()
         // The helper's own state is enough to rejoin; the key is only needed the first time.
         // Only a Mac that is in a fleet over that network, or hosts one, has a use for it.
@@ -579,7 +581,7 @@ final class FleetController: ObservableObject {
     // MARK: Alerts
 
     /// Trouble on another Mac worth interrupting for. This Mac's own trouble shows in its menu bar item as before.
-    private static let alertKinds: Set<String> = HistoryEvent.warningKinds.subtracting(["sleep"]).union(["host_offline"])
+    private static let alertKinds: Set<String> = HistoryEvent.warningKinds.subtracting(["sleep"]).union(["host_offline", HistoryEvent.alertIssue])
 
     private func pollEvents() {
         guard settings.fleetAlerts, let id = identity, let token = id.readerToken, !token.isEmpty, let client = client(for: id) else { return }

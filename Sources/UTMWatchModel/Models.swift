@@ -99,6 +99,9 @@ public struct HostSummary: Codable, Equatable {
     public var macOSLimit: Int
     /// Cores busy across the whole Mac (all processes); nil until two samples exist.
     public var hostCPUCores: Double? = nil
+    /// Room left on the Mac's own disk, and its size. VM disk images grow on it. nil when it cannot be read.
+    public var diskFreeBytes: UInt64? = nil
+    public var diskTotalBytes: UInt64? = nil
 
     public var overcommitted: Bool { allocatedCores > physicalCores }
 

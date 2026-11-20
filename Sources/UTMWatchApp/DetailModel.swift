@@ -16,6 +16,8 @@ final class DetailModel: ObservableObject {
     @Published var hover: Date?
     /// VM whose lines stay bright in the tracks while the others fade; nil shows all equally.
     @Published var focus: String?
+    /// The Alerts list is open over the right side of the tracks.
+    @Published var showAlerts = false
     @Published private(set) var history = History(from: 0, to: 0)
     @Published private(set) var stats: HistoryStore.Stats?
 
@@ -84,6 +86,12 @@ final class DetailModel: ObservableObject {
         let t = min(date, Date())
         pin = t
         setEnd(t.addingTimeInterval(Double(lengthSeconds) / 2))
+    }
+
+    /// Brings a moment into view and pins it: where an alert began, for one.
+    func show(moment ms: Int64) {
+        showAlerts = false
+        jump(to: Date(ms: ms))
     }
 
     /// Moves the pinned moment by whole samples (negative = earlier). With nothing pinned it starts from the end of the frame.
