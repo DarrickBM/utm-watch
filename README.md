@@ -85,7 +85,7 @@ Once a week the agent looks for rules that alert often for problems that end by 
 | **Claude Code** | The Claude Code already on your Mac, on the plan you have. UTM Watch finds it by itself. |
 | **Another command** | Any command that reads a question on standard input and answers on standard output, such as `ollama run`. |
 | **API key: a provider by name** | A key for Anthropic, DeepSeek, Kimi, Qwen, GLM or OpenAI, and a model name. |
-| **API key: a custom endpoint** | The address of a model on your Mac, or of any service with an OpenAI-style chat-completions API. Save your own endpoints as presets; they are kept in `ai-presets.json`, which you can also edit by hand. |
+| **API key: a custom endpoint** | The address of a model on your Mac, or of any service with an OpenAI-style chat-completions API. **+ New preset**, at the end of the preset row, saves an endpoint with its model and key under a name of your own; the endpoint in use does not change until you press Save. Presets are kept in `ai-presets.json`, which you can also edit by hand. |
 
 **What the agent is given.** No tools: it cannot run anything or change anything on your Mac. Each question carries only what it needs. For an issue that is the alert and about two hours of readings around it, with your VMs' names and the names of the largest processes; for a rule from a sentence it is the sentence and the rules. Issues are looked into at most 20 times a day. Keys are kept on your Mac in `~/Library/Application Support/UTM Watch/keys.json`, a file only your account can read; they are not encrypted.
 
