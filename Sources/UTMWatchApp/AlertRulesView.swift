@@ -4,11 +4,13 @@ import UTMWatchCore
 import UTMWatchStore
 
 /// The Alert rules window: every rule as a sentence whose numbers change in place, a check of the rule against the
-/// last 7 days of this Mac's own history, and the AI agent and notification settings.
+/// last 7 days of this Mac's own history, and what happens when each rule opens an alert. How alerts reach you and
+/// where the AI agent runs are app-wide, so they live in Settings.
 struct AlertRulesView: View {
     @ObservedObject var center: AlertCenter
     @ObservedObject var settings: AppSettings
     @ObservedObject var model: AppModel
+    var onOpenSettings: (SettingsTab) -> Void = { _ in }
 
     /// Debug aid: the rule the window opens on.
     static var initialKind: AlertKind = .cpu
@@ -31,21 +33,13 @@ struct AlertRulesView: View {
             HStack(alignment: .top, spacing: 16) {
                 ruleList.frame(width: 440)
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        editor
-                        HStack(alignment: .top, spacing: 14) {
-                            AIAgentCard(settings: settings, agent: center.agent)
-                            notificationsCard
-                        }
-                        PhoneCard(settings: settings, center: center)
-                    }
-                    .padding(.bottom, 4)
+                    editor.padding(.bottom, 4)
                 }
             }
         }
         .font(.system(size: 13))
         .padding(.horizontal, 20).padding(.vertical, 16)
-        .frame(minWidth: 1180, minHeight: 760)
+        .frame(minWidth: 1100, minHeight: 700)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { center.loadReplay() }
         .onChange(of: center.replayLoaded) {
@@ -74,10 +68,14 @@ struct AlertRulesView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!center.agent.isOn || asking || request.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            Text(note ?? (center.agent.isOn
-                 ? "Say what you want to be told about. Your AI agent turns it into one of the rules below, where you can check it against last week before it goes live."
-                 : "Writing a rule from a sentence needs an AI agent; choose one under \"AI agent\" below. Without one, change the rules by hand in the list."))
-                .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 28).fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(note ?? (center.agent.isOn
+                     ? "Say what you want to be told about. Your AI agent turns it into one of the rules below, where you can check it against last week before it goes live."
+                     : "Writing a rule from a sentence needs the AI agent, which is off. Without it, change the rules by hand in the list."))
+                    .fixedSize(horizontal: false, vertical: true)
+                settingsLink(.ai)
+            }
+            .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 28)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .textBackgroundColor)))
@@ -220,10 +218,6 @@ struct AlertRulesView: View {
                 }
                 Text(closesText(r)).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                Toggle("Phone", isOn: Binding(get: { r.phone }, set: { on in var n = r; n.phone = on; change(n) }))
-                    .toggleStyle(.switch).controlSize(.small)
-                    .help(settings.barkOn ? "Also push this rule's alerts to your phone" : "Also push this rule's alerts to your phone. Set the phone up in the Phone card below first.")
-                    .accessibilityLabel("Push this rule's alerts to my phone")
                 Toggle("On", isOn: Binding(get: { r.enabled }, set: { on in var n = r; n.enabled = on; change(n) }))
                     .toggleStyle(.switch).controlSize(.small)
                     .accessibilityLabel("Rule is on")
@@ -248,6 +242,9 @@ struct AlertRulesView: View {
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
             }
+
+            Divider()
+            whenItOpens(r)
         }
         .padding(.horizontal, 18).padding(.vertical, 16)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
@@ -351,21 +348,55 @@ struct AlertRulesView: View {
         return "Set like this, it would have alerted you \(res.count) time\(res.count == 1 ? "" : "s") in the last 7 days"
     }
 
-    // MARK: Notifications
+    // MARK: When it opens
 
-    private var notificationsCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Notifications").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).padding(.leading, 4)
-            VStack(spacing: 0) {
-                SwitchRow(label: "Notify me about issues", sub: "With the agent's finding once it is ready", isOn: $settings.notifyIssues)
-                Divider()
-                SwitchRow(label: "Notify me about risks", sub: "Off: risks still show in the menu bar and the brief", isOn: $settings.notifyRisks)
+    /// What happens for this rule when it opens an alert. Only the phone is chosen rule by rule; the rest follows
+    /// Settings, and each row says how and links there.
+    private func whenItOpens(_ r: AlertRule) -> some View {
+        let issue = r.level == .issue
+        let notified = issue ? settings.notifyIssues : settings.notifyRisks
+        let plural = issue ? "issues" : "risks"
+        let agentLine: String = {
+            if !issue { return "No: the agent looks into issues only" }
+            if !center.agent.isOn { return "No: the AI agent is off" }
+            if !settings.aiInvestigate { return "No: looking into issues is switched off" }
+            return "Yes: it adds the likely cause to the alert, usually within a minute"
+        }()
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("When it opens").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 12) {
+                openRow(icon: "macwindow", label: "Notification on this Mac",
+                        sub: notified ? "Yes: you are notified about every one of the \(plural)" : "No: notifications about \(plural) are off") {
+                    settingsLink(.alerts)
+                }
+                openRow(icon: "iphone", label: "Push to my phone",
+                        sub: settings.barkOn ? "Through Bark. Chosen for this rule alone." : "Set up Bark in Settings › Alerts first") {
+                    Toggle("Push to my phone", isOn: Binding(get: { r.phone }, set: { on in var n = r; n.phone = on; change(n) }))
+                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                        .accessibilityLabel("Push this rule's alerts to my phone")
+                }
+                openRow(icon: "sparkle", label: "AI agent looks into it", sub: agentLine) {
+                    settingsLink(.ai)
+                }
             }
-            .padding(.horizontal, 14)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func openRow<Trailing: View>(icon: String, label: String, sub: String, @ViewBuilder trailing: () -> Trailing) -> some View {
+        GridRow {
+            Image(systemName: icon).font(.system(size: 14)).foregroundStyle(.secondary).frame(width: 22)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                Text(sub).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailing().gridColumnAlignment(.trailing)
+        }
+    }
+
+    private func settingsLink(_ tab: SettingsTab) -> some View {
+        Button("Settings › \(tab.title)") { onOpenSettings(tab) }
+            .buttonStyle(.link).font(.system(size: 12)).fixedSize()
     }
 }
 
@@ -449,10 +480,11 @@ struct FlowLayout: Layout {
     }
 }
 
-/// Where the AI agent runs, and how it is connected: Claude Code on this Mac, or a model reached with an API key.
-struct AIAgentCard: View {
+/// The agent UTM Watch runs itself, as Settings › AI shows it: where it runs, how it is connected, and what it does.
+struct AIAgentSections: View {
     @ObservedObject var settings: AppSettings
     let agent: AIAgent
+    var onOpenAlertRules: () -> Void
 
     @StateObject private var saved = AIPresetList()
     @State private var storedKey = ""
@@ -473,50 +505,53 @@ struct AIAgentCard: View {
         switch settings.aiBackend {
         case "cli": return "Runs the Claude Code already on this Mac, on the plan you have."
         case "key": return "UTM Watch calls the model itself with your key; you pay the provider for each use."
-        default: return "No AI. Rules, the editor and the 7-day check all work without it."
+        default: return "No AI agent. Everything else in UTM Watch works without it."
         }
     }
 
+    private var off: Bool { settings.aiBackend == "off" }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("AI agent").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).padding(.leading, 4)
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Runs on").fixedSize()
-                        Spacer(minLength: 8)
-                        Picker("Where the AI agent runs", selection: $settings.aiBackend) {
-                            Text("Off").tag("off"); Text("Claude Code").tag("cli"); Text("API key").tag("key")
-                        }
-                        .pickerStyle(.segmented).labelsHidden().fixedSize()
-                    }
-                    Text(sub).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    if settings.aiBackend == "cli" { cliBox }
-                    if settings.aiBackend == "key" { keyBox }
-                    if settings.aiBackend != "off" {
-                        Text("What the agent is sent: the alert, and the readings around it with your VMs' names and the names of the busiest processes. It is given no tools and cannot change anything on this Mac.")
-                            .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
+        Section {
+            LabeledContent("Runs on") {
+                Picker("Where the AI agent runs", selection: $settings.aiBackend) {
+                    Text("Off").tag("off"); Text("Claude Code").tag("cli"); Text("API key").tag("key")
                 }
-                .padding(.vertical, 10)
-                Divider()
-                SwitchRow(label: "Investigate every issue when it opens", sub: "The agent reads the history around it and adds the likely cause to the alert. At most 20 a day.",
-                          isOn: Binding(get: { settings.aiBackend != "off" && settings.aiInvestigate }, set: { settings.aiInvestigate = $0 }),
-                          disabled: settings.aiBackend == "off")
-                Divider()
-                SwitchRow(label: "Suggest better settings", sub: "Once a week, for rules that alert often without anything going wrong",
-                          isOn: Binding(get: { settings.aiBackend != "off" && settings.aiSuggest }, set: { settings.aiSuggest = $0 }),
-                          disabled: settings.aiBackend == "off")
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
             }
-            .padding(.horizontal, 14)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
+            if settings.aiBackend == "cli" { cliBox }
+            if settings.aiBackend == "key" { keyBox }
+        } header: {
+            Text("AI agent in UTM Watch")
+        } footer: {
+            Text(sub + (off ? "" : " What the agent is sent: the alert, and the readings around it with your VMs' names and the names of the busiest processes. It is given no tools and cannot change anything on this Mac."))
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
         .onAppear { loadKey(); saved.watch(true) }
         .onDisappear { draft = nil; keySaver.flush(); saved.watch(false) }
         .onChange(of: settings.aiBackend) { draft = nil; testResult = nil; claudePath = AIAgent.findClaude() }
         .onChange(of: settings.aiProvider) { draft = nil; testResult = nil; loadKey() }
+
+        Section("What the agent does") {
+            LabeledContent {
+                Button("Alert rules…") { onOpenAlertRules() }
+            } label: {
+                Text("Write alert rules from a sentence")
+                Text("Say what you want to be told about, at the top of Alert rules")
+            }
+            .disabled(off)
+            Toggle(isOn: Binding(get: { !off && settings.aiInvestigate }, set: { settings.aiInvestigate = $0 })) {
+                Text("Look into each issue")
+                Text("Reads the history around it and adds the likely cause to the alert and its notification. At most 20 a day.")
+            }
+            .disabled(off)
+            Toggle(isOn: Binding(get: { !off && settings.aiSuggest }, set: { settings.aiSuggest = $0 })) {
+                Text("Suggest better settings for noisy rules")
+                Text("Once a week, for rules that alert often without anything going wrong. You choose whether to use it.")
+            }
+            .disabled(off)
+        }
     }
 
     private func status(_ ok: Bool, _ strong: String, _ rest: String) -> some View {
@@ -562,8 +597,8 @@ struct AIAgentCard: View {
             .controlSize(.small)
         }
         .font(.system(size: 12))
-        .padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .labelsHidden() // inside the Settings form, a field's title would otherwise become a row label
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var keyBox: some View {
@@ -667,8 +702,8 @@ struct AIAgentCard: View {
             }
         }
         .font(.system(size: 12))
-        .padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .labelsHidden() // inside the Settings form, a field's title would otherwise become a row label
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: settings.aiProvider) { old, new in
             // Each provider has model names of its own: remember the one in use, and bring back the new provider's.
             settings.aiModels[old] = settings.aiModel
@@ -842,130 +877,6 @@ final class AIPresetList: ObservableObject {
         guard now != stamp else { return }
         stamp = now
         presets = AIPresetsFile.load()
-    }
-}
-
-/// Pushing alerts to an iPhone through Bark: where to send them, and what besides the alert itself.
-struct PhoneCard: View {
-    @ObservedObject var settings: AppSettings
-    @ObservedObject var center: AlertCenter
-
-    @State private var key = ""
-    /// What is saved, as last read or written; and whether it has been read yet.
-    @State private var stored = ""
-    @State private var loaded = false
-    @State private var saver = KeySaver()
-    @State private var testing = false
-    @State private var testResult: (ok: Bool, text: String)?
-
-    private var summary: String {
-        let n = center.rules.filter { $0.enabled && $0.phone }.count
-        return n == 0 ? "No rule pushes to the phone yet." : "\(n) of \(center.rules.count) rules push to the phone."
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Phone").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).padding(.leading, 4)
-            VStack(alignment: .leading, spacing: 0) {
-                SwitchRow(label: "Push alerts to my iPhone with Bark", sub: "Bark is a free app for iPhone and iPad. It has no Android version.", isOn: $settings.barkOn)
-                if settings.barkOn {
-                    HStack(alignment: .top, spacing: 14) {
-                        setup.frame(maxWidth: .infinity, alignment: .topLeading)
-                        VStack(alignment: .leading, spacing: 0) {
-                            (Text(summary).fontWeight(.semibold) + Text(" Choose rule by rule with the Phone switch beside each rule's On switch; rules that push show a small phone in the list.").foregroundColor(.secondary))
-                                .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true).padding(.bottom, 8)
-                            Divider()
-                            SwitchRow(label: "Issues break through Focus", sub: "Sent as time-sensitive, so they show while a Focus is on", isOn: $settings.barkUrgentIssues)
-                            Divider()
-                            SwitchRow(label: "Also push when an alert ends", sub: "One more push saying it is over, and how long it lasted", isOn: $settings.barkEnded)
-                            Divider()
-                            SwitchRow(label: "Add the AI agent's finding", sub: "The same push is updated once the finding is ready", isOn: $settings.barkFinding)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                    }
-                    .padding(.bottom, 10)
-                }
-            }
-            .padding(.horizontal, 14)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.10)))
-        }
-        .onAppear { loadKey() }
-        .onDisappear { saver.flush() }
-        .onChange(of: settings.barkOn) { loadKey() }
-    }
-
-    /// The saved key, read off the main thread.
-    private func loadKey() {
-        guard settings.barkOn, !loaded else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let saved = BarkSender.savedKey()
-            DispatchQueue.main.async {
-                loaded = true
-                stored = saved
-                if key.isEmpty { key = saved }
-            }
-        }
-    }
-
-    private var setup: some View {
-        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
-            GridRow {
-                Text("Device key").foregroundStyle(.secondary).fixedSize()
-                SecureField("From the address Bark shows", text: $key).textFieldStyle(.roundedBorder)
-                    .onChange(of: key) { keyChanged() }
-                    .accessibilityLabel("Bark device key")
-            }
-            GridRow {
-                Text("Server").foregroundStyle(.secondary)
-                TextField(BarkPush.defaultServer, text: $settings.barkServer).textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Bark server address")
-            }
-            GridRow {
-                Color.clear.frame(width: 1, height: 1)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Button(testing ? "Sending…" : "Send a test") { test() }.controlSize(.small).disabled(testing || key.trimmingCharacters(in: .whitespaces).isEmpty)
-                        if let r = testResult {
-                            Image(systemName: r.ok ? "checkmark" : "exclamationmark.triangle.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(r.ok ? Color.green : Color.orange)
-                            Text(r.text).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                        }
-                    }
-                    Text("Open Bark on the phone and copy the key from the address it shows; you can paste the whole address. The key is kept on this Mac, in a file only you can read. Use your own server's address if you run one.")
-                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-        .font(.system(size: 12))
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
-    }
-
-    /// A whole pasted address is taken apart into the server and the key. The key is saved shortly after the last
-    /// change, not on every keystroke.
-    private func keyChanged() {
-        let parsed = BarkPush.parse(key)
-        if parsed.server != nil || key.contains("://") {
-            if let server = parsed.server { settings.barkServer = server }
-            key = parsed.key
-            return // setting `key` calls this again with the bare key
-        }
-        // A key supplied for one trial run, or typed into a run pointed at another server, is not the user's to keep.
-        guard loaded, ProcessInfo.processInfo.environment["UTMWATCH_BARK_KEY"] == nil, !BarkSender.redirected else { return }
-        guard parsed.key != stored else { saver.cancel(); return }
-        let value = parsed.key
-        saver.schedule(value, account: BarkSender.account) { ok in
-            if ok { stored = value } else { testResult = (false, "The key could not be saved.") }
-        }
-    }
-
-    private func test() {
-        testing = true; testResult = nil
-        let message = BarkPush.Message(title: "UTM Watch", body: "Test: alerts will arrive like this.", id: "utmwatch-test")
-        BarkSender.send(message, server: settings.barkServer, key: BarkPush.parse(key).key) { failure, _ in
-            testing = false
-            testResult = failure.map { (false, $0) } ?? (true, "Sent. Check your phone.")
-        }
     }
 }
 

@@ -72,7 +72,7 @@ func parseTime(_ value: Any?, default fallback: Int64? = nil, now: Int64) throws
 
 func requireAgentAccess() throws {
     if appDefaults?.object(forKey: "allowAgents") as? Bool == false {
-        throw ToolError(message: "Access for AI agents is switched off in UTM Watch's Settings (AI diagnosis > Let AI agents read history).")
+        throw ToolError(message: "Access for AI agents is switched off in UTM Watch's Settings (AI > Let AI agents read history).")
     }
 }
 

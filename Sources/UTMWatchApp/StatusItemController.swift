@@ -29,7 +29,6 @@ final class StatusItemController: NSObject {
     private var pointerInside = false
     private var shownLevel: AlertLevel?
     private var alertCancellable: AnyCancellable?
-    var onOpenAlertRules: (() -> Void)?
     private let briefPointer = BriefPointer()
     private var lastLoggedFrame: NSRect = .zero
 
@@ -133,6 +132,9 @@ final class StatusItemController: NSObject {
         }
     }
 
+    /// Debug aid: the right-click menu's item titles, in order, separators as "—".
+    func menuTitles() -> [String] { makeMenu().items.map { $0.isSeparatorItem ? "—" : $0.title } }
+
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
         if case .available(let version) = updater.state {
@@ -146,7 +148,6 @@ final class StatusItemController: NSObject {
         if offersFleet?() ?? true {
             menu.addItem(withTitle: "Open Fleet", action: #selector(openFleet), keyEquivalent: "").target = self
         }
-        menu.addItem(withTitle: "Alert Rules…", action: #selector(openAlertRules), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         if updater.currentVersion != nil {
             menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
@@ -165,7 +166,6 @@ final class StatusItemController: NSObject {
     @objc private func installUpdate() { updater.install() }
     @objc private func checkForUpdates() { updater.checkManually() }
     @objc private func openSettings() { onOpenSettings?() }
-    @objc private func openAlertRules() { onOpenAlertRules?() }
 
     @objc private func testNotification() {
         let center = UNUserNotificationCenter.current()

@@ -56,7 +56,7 @@ UTM Watch is an independent project. It is not affiliated with or endorsed by th
 
 ## AI built in
 
-UTM Watch can put an AI agent to work on your VMs' history. It is optional and off by default, it runs on a model you already have, and everything else in the app works without it. Switch it on in **Alert Rules…** (right-click the menu bar item) under "AI agent".
+UTM Watch can put an AI agent to work on your VMs' history. It is optional and off by default, it runs on a model you already have, and everything else in the app works without it. Switch it on in **Settings › AI** (right-click the menu bar item), where every AI feature is: the agent UTM Watch runs itself, and the read-only access for agents you connect.
 
 ### Say what you want to be told about
 
@@ -128,9 +128,9 @@ History is stored in `~/Library/Application Support/UTM Watch/history.sqlite`.
 
 UTM Watch tells you about **risks** (something will break if it carries on: a disk filling up, memory short, a VM at its CPU limit, weak Wi-Fi) and **issues** (something is broken now: a VM stopped or stopped answering, a disk full, the network down or poor). An alert opens once, stays while the problem lasts and closes by itself. It shows as a yellow or red mark in the menu bar, at the top of the hover brief, in the Alerts list of the detail window, and as one macOS notification.
 
-**On your iPhone.** Alerts can also be pushed to an iPhone or iPad through [Bark](https://github.com/Finb/Bark), a free app (there is no Android version). In Alert Rules… › Phone, paste the address Bark shows on the phone and send a test. Each rule has a "Phone" switch, so you choose which alerts reach the phone; issues start on and risks off. Your own Bark server works too.
+**On your iPhone.** Alerts can also be pushed to an iPhone or iPad through [Bark](https://github.com/Finb/Bark), a free app (there is no Android version). In **Settings › Alerts**, under Phone, paste the address Bark shows on the phone and send a test. Each rule has a "Push to my phone" switch under "When it opens" in Alert rules, so you choose which alerts reach the phone; issues start on and risks off. Your own Bark server works too.
 
-Every rule is a sentence whose numbers you change in the **Alert rules** window (right-click the menu bar item). The window replays each rule over your last 7 days and says how often it would have alerted you, before you rely on it.
+Every rule is a sentence whose numbers you change in the **Alert rules** window (Settings › Alerts › Alert rules…, or "Alert rules…" in the Alerts list of the detail window). The window replays each rule over your last 7 days and says how often it would have alerted you, before you rely on it. Under "When it opens", each rule also says whether you get a notification, whether it pushes to your phone and whether the AI agent looks into it. Which kinds of alert notify you is set in **Settings › Alerts**.
 
 An optional AI agent can write a rule from a sentence, look into each issue and suggest better numbers for noisy rules. See [AI built in](#ai-built-in).
 
@@ -158,7 +158,7 @@ Then ask, for example: "A user says connecting to one of my VMs is sometimes slo
 | `list_alert_rules` | The alert rules as you have set them. |
 | `list_macs` | Every Mac in the fleet (on a Mac that has joined one). |
 
-Access can be switched off in the app's Settings under AI diagnosis.
+Access can be switched off in **Settings › AI**, under "Agents you connect yourself (MCP)".
 
 ## Monitor several Macs as a fleet
 

@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: StatusItemController!
     private var detailWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var settingsTabs: NSTabViewController?
     private var alertRulesWindow: NSWindow?
     private var cancellables: Set<AnyCancellable> = []
     private var detail: DetailModel!
@@ -74,7 +75,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.onOpenDetails = { [weak self] in self?.showDetails() }
         statusItem.onOpenSettings = { [weak self] in self?.showSettings() }
         statusItem.onOpenFleet = { [weak self] in self?.showFleet() }
-        statusItem.onOpenAlertRules = { [weak self] in self?.showAlertRules() }
         // Debug aid: `--demo-alerts` shows example alerts on every surface. Nothing is stored or sent.
         if CommandLine.arguments.contains("--demo-alerts") { model.alerts.showDemo() }
         // Debug aid: `--bark-server <address>` pushes this run's alerts there, without saving the choice. The saved device key
@@ -184,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             settings.aiProvider = AIAgent.custom
             settings.aiBaseURL = endpoint; settings.aiModel = value("--ai-model") ?? settings.aiModel
         }
-        // `--bark-server <address>` shows the Phone card set up, for this run only.
+        // `--bark-server <address>` shows the Phone section of Settings › Alerts set up, for this run only.
         if let server = value("--bark-server") { BarkSender.redirected = true; settings.overridesPersist = false; settings.barkOn = true; settings.barkServer = server }
         showAlertRules()
         if let k = args.firstIndex(of: "--snapshot-size"), k + 2 < args.count, let w = Double(args[k + 1]), let h = Double(args[k + 2]) {
@@ -289,9 +289,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
             }
         }
+        // `--dump-menu <file>` writes the right-click menu's item titles.
+        if let p = path("--dump-menu") {
+            try? statusItem.menuTitles().joined(separator: "\n").write(toFile: p, atomically: true, encoding: .utf8)
+        }
+        // `--open-settings <tab>` opens the Settings window on that tab, as a click on the menu would.
+        if let t = path("--open-settings").flatMap(SettingsTab.init(rawValue:)) {
+            if let backend = path("--ai-backend"), ["off", "cli", "key"].contains(backend) { settings.overridesPersist = false; settings.aiBackend = backend }
+            showSettings(t)
+        }
         if let p = path("--snapshot-settings") {
             SettingsView.snapshotHeight = path("--snapshot-height").flatMap(Double.init).map { CGFloat($0) }
-            capture(SettingsView(settings: settings, model: model, fleet: fleet, onClearData: {}), to: p)
+            // `--settings-tab general|alerts|ai|fleet` chooses the tab pictured.
+            let tab = path("--settings-tab").flatMap(SettingsTab.init(rawValue:)) ?? .general
+            // `--ai-backend off|cli|key` and `--bark-server <address>` show those setups, for this run only.
+            if let backend = path("--ai-backend"), ["off", "cli", "key"].contains(backend) { settings.overridesPersist = false; settings.aiBackend = backend }
+            if let server = path("--bark-server") { BarkSender.redirected = true; settings.overridesPersist = false; settings.barkOn = true; settings.barkServer = server }
+            capture(settingsPage(tab).background(Color(nsColor: .windowBackgroundColor)), to: p)
         }
     }
 
@@ -360,7 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             w.title = "UTM Watch Fleet"
             w.isReleasedWhenClosed = false
             w.delegate = self
-            w.contentView = NSHostingView(rootView: FleetWindowView(fleet: fleet, settings: settings, onSettings: { [weak self] in self?.showSettings() }))
+            w.contentView = NSHostingView(rootView: FleetWindowView(fleet: fleet, settings: settings, onSettings: { [weak self] in self?.showSettings(.fleet) }))
             w.contentMinSize = NSSize(width: 1340, height: 720)
             w.center()
             w.setFrameAutosaveName("UTMWatchFleet")
@@ -404,7 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--check-edit-keys"), i + 1 < args.count else { return }
         let out = args[i + 1]
-        showSettings()
+        showSettings(.ai)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, let window = self.settingsWindow else { return }
             let board = NSPasteboard.general
@@ -455,13 +469,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func showAlertRules() {
         if alertRulesWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 800),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             w.title = "Alert rules"
             w.isReleasedWhenClosed = false
             w.delegate = self
-            w.contentView = NSHostingView(rootView: AlertRulesView(center: model.alerts, settings: settings, model: model))
-            w.contentMinSize = NSSize(width: 1180, height: 760)
+            w.contentView = NSHostingView(rootView: AlertRulesView(center: model.alerts, settings: settings, model: model,
+                                                                   onOpenSettings: { [weak self] tab in self?.showSettings(tab) }))
+            w.contentMinSize = NSSize(width: 1100, height: 700)
             w.center()
             w.setFrameAutosaveName("UTMWatchAlertRules")
             alertRulesWindow = w
@@ -471,24 +486,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateDockPresence()
     }
 
-    private func showSettings() {
+    private func showSettings(_ tab: SettingsTab? = nil) {
         if settingsWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 600),
-                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            w.title = "UTM Watch Settings"
+            let tabs = NSTabViewController()
+            tabs.tabStyle = .toolbar
+            for t in SettingsTab.allCases {
+                let page = NSHostingController(rootView: settingsPage(t))
+                page.title = t.title
+                page.sizingOptions = []
+                page.preferredContentSize = SettingsView.pageSize
+                let item = NSTabViewItem(viewController: page)
+                item.label = t.title
+                item.image = NSImage(systemSymbolName: t.symbol, accessibilityDescription: t.title)
+                tabs.addTabViewItem(item)
+            }
+            let w = NSWindow(contentViewController: tabs)
+            w.styleMask = [.titled, .closable]
+            w.setContentSize(SettingsView.pageSize)
             w.isReleasedWhenClosed = false
             w.delegate = self
-            w.contentView = NSHostingView(rootView: SettingsView(settings: settings, model: model, fleet: fleet, onClearData: { [weak self] in
-                self?.model.clearHistory()
-                self?.detail.refresh(force: true)
-                self?.detail.refreshStats()
-            }, onOpenFleet: { [weak self] in self?.showFleet() }, onOpenAlertRules: { [weak self] in self?.showAlertRules() }))
-            w.setContentSize(w.contentView?.fittingSize ?? w.frame.size)
             w.center()
+            settingsTabs = tabs
             settingsWindow = w
         }
+        if let tab, let i = SettingsTab.allCases.firstIndex(of: tab) { settingsTabs?.selectedTabViewItemIndex = i }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
         updateDockPresence()
+    }
+
+    /// One tab of the Settings window.
+    private func settingsPage(_ tab: SettingsTab) -> AnyView {
+        switch tab {
+        case .general:
+            return AnyView(SettingsView(settings: settings, model: model, onClearData: { [weak self] in
+                self?.model.clearHistory()
+                self?.detail.refresh(force: true)
+                self?.detail.refreshStats()
+            }))
+        case .alerts:
+            return AnyView(AlertSettingsView(settings: settings, center: model.alerts, onOpenAlertRules: { [weak self] in self?.showAlertRules() }))
+        case .ai:
+            return AnyView(AISettingsView(settings: settings, agent: model.alerts.agent, onOpenAlertRules: { [weak self] in self?.showAlertRules() }))
+        case .fleet:
+            return AnyView(FleetSettingsView(fleet: fleet, settings: settings, onOpenFleet: { [weak self] in self?.showFleet() }))
+        }
     }
 }

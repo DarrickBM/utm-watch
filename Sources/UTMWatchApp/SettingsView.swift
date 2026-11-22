@@ -6,15 +6,8 @@ import UTMWatchStore
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var model: AppModel
-    @ObservedObject var fleet: FleetController
     var onClearData: () -> Void
-    var onOpenFleet: () -> Void = {}
-    var onOpenAlertRules: () -> Void = {}
 
-    @State private var copied = false
-    private var connectCommand: String {
-        "claude mcp add utm-watch -- \"\(Bundle.main.bundlePath)/Contents/MacOS/utmwatch-mcp\""
-    }
     @State private var confirmClear = false
     @State private var confirmReset = false
     @State private var stats: HistoryStore.Stats?
@@ -75,25 +68,6 @@ struct SettingsView: View {
                     .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Section("Alerts") {
-                LabeledContent {
-                    Button("Alert rules…") { onOpenAlertRules() }
-                } label: {
-                    Text("Risks and issues")
-                    Text("What UTM Watch alerts you about, when, and whether an AI agent looks into it")
-                }
-                Toggle(isOn: $settings.notifyIssues) {
-                    Text("Notify me about issues")
-                    Text("Something is broken now: a VM stopped, a disk is full, the network is down")
-                }
-                Toggle(isOn: $settings.notifyRisks) {
-                    Text("Notify me about risks")
-                    Text("Something will break if it carries on: a disk filling up, memory short")
-                }
-            }
-
-            FleetSettingsSection(fleet: fleet, settings: settings, onOpenFleet: onOpenFleet)
-
             Section {
                 Picker("Keep history for", selection: $settings.retentionDays) {
                     Text("1 day").tag(1); Text("7 days").tag(7); Text("30 days").tag(30)
@@ -114,27 +88,6 @@ struct SettingsView: View {
                     Text("This cannot be undone. Recording continues from now.")
                 }
             } header: { Text("History") }
-
-            Section("AI diagnosis") {
-                Toggle(isOn: $settings.allowAgents) {
-                    Text("Let AI agents read history")
-                    Text("Read-only access through MCP, for agents you connect such as Claude")
-                }
-                LabeledContent {
-                    Button(copied ? "Copied" : "Copy command") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(connectCommand, forType: .string)
-                        copied = true
-                    }
-                } label: {
-                    Text("Connect an agent")
-                    Text(connectCommand).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                }
-                Toggle(isOn: $settings.captureProcesses) {
-                    Text("Record the busiest processes at events")
-                    Text("Saved when pressure, swap or a CPU limit event fires, so an agent can explain why")
-                }
-            }
 
             Section("Permissions") {
                 LabeledContent {
@@ -189,8 +142,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear { loadStats() }
-        // A fixed height with the form scrolling inside: the Fleet section grows and shrinks with its state.
-        .frame(width: 560, height: SettingsView.snapshotHeight ?? 720)
+        .settingsPageFrame()
     }
 
     private func status(_ ok: Bool, _ text: String) -> some View {
