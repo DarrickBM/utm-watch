@@ -71,8 +71,9 @@ int shim_proc_name(pid_t pid, char *buf, uint32_t size);
 int shim_if_link(const char *name, uint64_t *baudrate, uint64_t *ierrors, uint64_t *oerrors);
 
 /// Sends one ICMP echo to an IPv4 address and waits for the reply (no root needed).
+/// A non-NULL `interface` sends it out that interface whatever the routing table says.
 /// Returns 0 with the round-trip time, 1 on timeout, -1 on error.
-int shim_ping(const char *ip, int timeout_ms, double *rtt_ms);
+int shim_ping(const char *ip, const char *interface, int timeout_ms, double *rtt_ms);
 
 #ifdef __cplusplus
 }

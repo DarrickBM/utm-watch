@@ -236,7 +236,7 @@ static uint16_t icmp_checksum(const void *data, size_t len) {
     return (uint16_t)~sum;
 }
 
-int shim_ping(const char *ip, int timeout_ms, double *rtt_ms) {
+int shim_ping(const char *ip, const char *interface, int timeout_ms, double *rtt_ms) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_len = sizeof(addr);
@@ -246,6 +246,11 @@ int shim_ping(const char *ip, int timeout_ms, double *rtt_ms) {
     /* Datagram ICMP sockets need no privileges on macOS. */
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
     if (s < 0) return -1;
+    if (interface != NULL) {
+        /* Bound to the interface, the echo ignores routes a VPN or exit node may have taken over. */
+        unsigned int index = if_nametoindex(interface);
+        if (index == 0 || setsockopt(s, IPPROTO_IP, IP_BOUND_IF, &index, sizeof(index)) < 0) { close(s); return -1; }
+    }
 
     static uint16_t counter = 0;
     uint16_t seq = ++counter;

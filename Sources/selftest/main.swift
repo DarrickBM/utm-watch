@@ -217,7 +217,8 @@ do {
     check(NetProbe.parseRoute("   route to: default\n    gateway: 192.168.1.1\n  interface: en1\n      flags: <UP>").gateway == "192.168.1.1", "default gateway parsed")
     check(NetProbe.parseRoute("    gateway: 192.168.1.1\n  interface: en1\n").interface == "en1", "default interface parsed")
     let arp = NetProbe.parseARP("? (192.168.64.3) at 02:1a:2b:3c:4d:5e on bridge100 ifscope [bridge]\n? (203.0.113.9) at (incomplete) on bridge100 ifscope [bridge]\n? (192.168.1.9) at a:b:c:d:e:f on en1 ifscope [ethernet]\n? (192.168.64.2) at 02:aa:bb:cc:dd:6 on bridge100 ifscope [bridge]")
-    check(arp["02:1a:2b:3c:4d:5e"] == "192.168.64.3" && arp["02:aa:bb:cc:dd:06"] == "192.168.64.2" && arp.count == 2, "ARP: bridge entries only, MACs normalized, incomplete skipped")
+    check(arp["02:1a:2b:3c:4d:5e"]?.ip == "192.168.64.3" && arp["02:aa:bb:cc:dd:06"]?.ip == "192.168.64.2" && arp.count == 2, "ARP: bridge entries only, MACs normalized, incomplete skipped")
+    check(arp["02:1a:2b:3c:4d:5e"]?.interface == "bridge100", "ARP: bridge interface kept so VM pings can be bound to it")
 
     let path = NSTemporaryDirectory() + "utmwatch-selftest-probe-\(ProcessInfo.processInfo.processIdentifier).sqlite"
     for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + suffix) }

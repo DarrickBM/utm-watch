@@ -10,14 +10,21 @@ public final class NetProbe {
 
     private var route: (gateway: String?, interface: String?) = (nil, nil)
     private var routeAt = Date.distantPast
-    private var arp: [String: String] = [:]   // normalized MAC -> IPv4
+    private var arp: [String: BridgeHost] = [:]   // normalized MAC -> address on a VM bridge
     private var arpAt = Date.distantPast
 
     public init(anchors: [String] = ["1.1.1.1", "223.5.5.5"]) { self.anchors = anchors }
 
-    public static func ping(_ ip: String, timeoutMs: Int32 = 1000) -> Double? {
+    /// A host on a VM bridge: its IPv4 address and the bridge it sits on.
+    public struct BridgeHost: Equatable {
+        public var ip: String
+        public var interface: String
+    }
+
+    /// Pings `ip`, out of `interface` when given rather than wherever the routing table points.
+    public static func ping(_ ip: String, interface: String? = nil, timeoutMs: Int32 = 1000) -> Double? {
         var rtt = 0.0
-        return shim_ping(ip, timeoutMs, &rtt) == 0 ? rtt : nil
+        return shim_ping(ip, interface, timeoutMs, &rtt) == 0 ? rtt : nil
     }
 
     /// One line describing what the last round saw; changes are worth logging.
@@ -35,15 +42,15 @@ public final class NetProbe {
         return (gateway, interface)
     }
 
-    /// MAC -> IP for hosts on the VM bridges, from `arp -an`.
-    public static func parseARP(_ output: String) -> [String: String] {
-        var map: [String: String] = [:]
+    /// MAC -> address and bridge for hosts on the VM bridges, from `arp -an`.
+    public static func parseARP(_ output: String) -> [String: BridgeHost] {
+        var map: [String: BridgeHost] = [:]
         for line in output.split(separator: "\n") {
             // ? (192.168.64.3) at 02:1a:2b:3c:4d:5e on bridge100 ifscope [bridge]
             let f = line.split(separator: " ").map(String.init)
             guard f.count >= 6, f[2] == "at", f[4] == "on", f[5].hasPrefix("bridge"), f[3].contains(":") else { continue }
             let ip = f[1].trimmingCharacters(in: CharacterSet(charactersIn: "()"))
-            map[MACAddress.normalize(f[3])] = ip
+            map[MACAddress.normalize(f[3])] = BridgeHost(ip: ip, interface: f[5])
         }
         return map
     }
@@ -91,8 +98,9 @@ public final class NetProbe {
         var vmPing: [String: Double?] = [:]
         for t in targets {
             // A VM with no ARP entry yet has not spoken on the network; skip it, do not count it as lost.
-            guard let ip = t.macs.compactMap({ arp[$0] }).first else { continue }
-            vmPing[t.key] = .some(NetProbe.ping(ip, timeoutMs: timeoutMs))
+            guard let host = t.macs.compactMap({ arp[$0] }).first else { continue }
+            // Out the VM's own bridge: a VPN or exit node can drop or override the route to it (the VM is fine meanwhile).
+            vmPing[t.key] = .some(NetProbe.ping(host.ip, interface: host.interface, timeoutMs: timeoutMs))
         }
         let gateway = route.gateway.flatMap { NetProbe.ping($0, timeoutMs: timeoutMs) }
         var internet: Double?
