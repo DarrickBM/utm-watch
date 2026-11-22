@@ -72,10 +72,10 @@ struct AlertRulesView: View {
                 Text(note ?? (center.agent.isOn
                      ? "Say what you want to be told about. Your AI agent turns it into one of the rules below, where you can check it against last week before it goes live."
                      : "Writing a rule from a sentence needs the AI agent, which is off. Without it, change the rules by hand in the list."))
-                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 settingsLink(.ai)
             }
-            .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 28)
+            .font(.system(size: 12)).padding(.leading, 28)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .textBackgroundColor)))

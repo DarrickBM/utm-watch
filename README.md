@@ -76,9 +76,11 @@ When an issue opens, the agent reads the readings around it and adds what most l
 
 Once a week the agent looks for rules that alert often for problems that end by themselves, and suggests a number that would have kept only the alerts worth an interruption. One click applies it.
 
-![The Alert rules window with a suggestion from the AI agent under a rule's 7-day chart, and the AI agent card with its choice of providers](docs/images/ai-suggestion-providers.png)
+![The Alert rules window with a suggestion from the AI agent under a rule's 7-day chart](docs/images/ai-suggestion.png)
 
 **Bring your own model.** The agent runs on one of:
+
+<p align="center"><img src="docs/images/ai-settings.png" width="560" alt="Settings › AI: where the agent runs and the choice of providers, what the agent does, and access for agents you connect yourself"></p>
 
 | Runs on | What you need |
 |---|---|

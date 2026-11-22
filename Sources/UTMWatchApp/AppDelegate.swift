@@ -173,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if args.contains("--demo-proposal") {
             AlertRulesView.demoProposal = ("Tell me if any VM uses more than 80% of its CPU for 5 minutes", AlertRule(kind: .cpu, level: .risk, value: 80, minutes: 5))
         }
+        if args.contains("--demo-suggestion") { model.alerts.showDemoSuggestion() }
         // For this run only: the choice is not saved, so a trial copy cannot change the real setting.
         if let backend = value("--ai-backend"), ["off", "cli", "key"].contains(backend) { settings.overridesPersist = false; settings.aiBackend = backend }
         if let provider = value("--ai-provider"), AIAgent.providerIDs.contains(provider) {
@@ -296,6 +297,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // `--open-settings <tab>` opens the Settings window on that tab, as a click on the menu would.
         if let t = path("--open-settings").flatMap(SettingsTab.init(rawValue:)) {
             if let backend = path("--ai-backend"), ["off", "cli", "key"].contains(backend) { settings.overridesPersist = false; settings.aiBackend = backend }
+            if let provider = path("--ai-provider"), AIAgent.providerIDs.contains(provider) {
+                settings.overridesPersist = false; settings.aiProvider = provider
+                settings.aiModel = AIAgent.defaultModel(provider: provider, custom: settings.aiBaseURL)
+            }
             showSettings(t)
         }
         if let p = path("--snapshot-settings") {

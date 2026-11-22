@@ -416,6 +416,13 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
 
     // MARK: Debug aid
 
+    /// `--demo-suggestion`: the suggestion a weekly check could make for the memory rule, for pictures. Not saved.
+    func showDemoSuggestion() {
+        guard var r = rules.first(where: { $0.kind == .memory }) else { return }
+        r.minutes = 15
+        suggestions = [AlertAI.Suggestion(kind: .memory, rule: r, reason: "Most of this rule's alerts last week ended within a few minutes and nothing went wrong afterwards. Waiting 15 minutes would have kept only the long ones.")]
+    }
+
     /// `--demo-alerts`: example alerts in place of the real ones, for pictures of every surface. Nothing is stored or sent.
     func showDemo() {
         demo = true
