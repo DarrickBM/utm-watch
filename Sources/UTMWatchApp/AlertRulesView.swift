@@ -459,8 +459,10 @@ struct AIAgentCard: View {
     /// The account the key field was last filled from, so typing in the address reloads it only when the host changes.
     @State private var loadedAccount = ""
     @State private var keySaver = KeySaver()
-    @State private var namingPreset = false
-    @State private var presetName = ""
+    /// A new preset being filled in. While there is one, the Address, API key and Model fields edit it and not the
+    /// settings in use, so leaving the form any way but Save changes nothing.
+    @State private var draft: AIPresetDraft?
+    @FocusState private var addressFocused: Bool
     @State private var claudePath: String? = AIAgent.findClaude()
     @State private var editingCommand = false
     @State private var key = ""
@@ -512,9 +514,9 @@ struct AIAgentCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .onAppear { loadKey(); saved.watch(true) }
-        .onDisappear { keySaver.flush(); saved.watch(false) }
-        .onChange(of: settings.aiBackend) { testResult = nil; claudePath = AIAgent.findClaude() }
-        .onChange(of: settings.aiProvider) { testResult = nil; loadKey() }
+        .onDisappear { draft = nil; keySaver.flush(); saved.watch(false) }
+        .onChange(of: settings.aiBackend) { draft = nil; testResult = nil; claudePath = AIAgent.findClaude() }
+        .onChange(of: settings.aiProvider) { draft = nil; testResult = nil; loadKey() }
     }
 
     private func status(_ ok: Bool, _ strong: String, _ rest: String) -> some View {
@@ -587,7 +589,8 @@ struct AIAgentCard: View {
                 GridRow(alignment: .top) {
                     Text("Address").foregroundStyle(.secondary).padding(.top, 4)
                     VStack(alignment: .leading, spacing: 6) {
-                        TextField("https://…/v1", text: $settings.aiBaseURL).textFieldStyle(.roundedBorder)
+                        TextField("https://…/v1", text: draftField(\.address, else: $settings.aiBaseURL)).textFieldStyle(.roundedBorder)
+                            .focused($addressFocused)
                             .accessibilityLabel("Address of the chat-completions service")
                         FlowLayout(spacing: 5) {
                             ForEach(AIAgent.presets) { preset in
@@ -597,43 +600,55 @@ struct AIAgentCard: View {
                             ForEach(saved.presets, id: \.name) { preset in
                                 chip(preset.name, address: preset.address, model: preset.model, onRemove: { remove(preset) })
                             }
-                            if canSavePreset, !namingPreset {
+                            // Always there. On an address typed but not saved yet it only asks for a name; otherwise the form starts empty.
+                            if draft == nil {
                                 Button {
-                                    presetName = AIPreset.host(of: settings.aiBaseURL) ?? ""
-                                    namingPreset = true
+                                    let typed = AIPresetDraft(name: AIPreset.host(of: settings.aiBaseURL) ?? "", address: settings.aiBaseURL, model: settings.aiModel, key: key)
+                                    let p = problem(typed)
+                                    if p != .noAddress, p != .addressTaken {
+                                        draft = typed
+                                    } else {
+                                        draft = AIPresetDraft()
+                                        addressFocused = true
+                                    }
+                                    testResult = nil
                                 } label: {
-                                    Text("+ Save as preset").fontWeight(.semibold)
+                                    Text("+ New preset").fontWeight(.semibold)
                                         .padding(.horizontal, 10).frame(height: 22)
                                         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
                                         .contentShape(Capsule())
                                 }
                                 .buttonStyle(.plain)
-                                .help("Keeps this address and model under a name of your own")
+                                .help("Keeps an address with its model and key under a name of your own")
                             }
                         }
-                        if canSavePreset, namingPreset {
+                        if let d = draft {
                             HStack(spacing: 6) {
                                 Text("Name").foregroundStyle(.secondary).fixedSize()
-                                TextField("Name for this endpoint", text: $presetName).textFieldStyle(.roundedBorder)
+                                TextField("Name for this endpoint", text: draftField(\.name, else: .constant(""))).textFieldStyle(.roundedBorder)
                                     .onSubmit { savePreset() }
                                     .accessibilityLabel("Name for this preset")
                                 Button("Save") { savePreset() }.buttonStyle(.borderedProminent)
-                                    .disabled(presetName.trimmingCharacters(in: .whitespaces).isEmpty)
-                                Button("Cancel") { namingPreset = false }
+                                    .disabled(problem(d) != nil)
+                                Button("Cancel") { draft = nil }
                             }
                             .controlSize(.small)
-                            if isBuiltInName(presetName) {
-                                Text("That is the name of a built-in preset; choose another.").foregroundStyle(.secondary)
+                            // Only what the user could not guess: an empty field needs no telling.
+                            switch problem(d) {
+                            case .addressTaken: Text("A preset already has this address.").foregroundStyle(.secondary)
+                            case .nameBuiltIn: Text("That name is built in; choose another.").foregroundStyle(.secondary)
+                            case .nameTaken: Text("You already have a preset with this name.").foregroundStyle(.secondary)
+                            default: EmptyView()
                             }
                         }
-                        Text("For a model on this Mac or any other service that speaks the OpenAI chat-completions API. Type its address and save it as a preset of your own. The × on one of yours removes it and forgets its key.")
+                        Text("The endpoint must support OpenAI chat completions.")
                             .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
             GridRow {
                 Text("API key").foregroundStyle(.secondary)
-                SecureField(settings.aiProvider == AIAgent.anthropic ? "sk-ant-…" : settings.aiProvider == AIAgent.custom ? "Key for this address" : "API key", text: $key)
+                SecureField(settings.aiProvider == AIAgent.anthropic ? "sk-ant-…" : settings.aiProvider == AIAgent.custom ? "Key for this address" : "API key", text: draftField(\.key, else: $key))
                     .textFieldStyle(.roundedBorder)
                     // Saved as it is typed or pasted: closing the window must not lose it.
                     .onChange(of: key) { saveKey() }
@@ -641,7 +656,7 @@ struct AIAgentCard: View {
             }
             GridRow {
                 Text("Model").foregroundStyle(.secondary)
-                TextField("Model name", text: $settings.aiModel).textFieldStyle(.roundedBorder).accessibilityLabel("Model name")
+                TextField("Model name", text: draftField(\.model, else: $settings.aiModel)).textFieldStyle(.roundedBorder).accessibilityLabel("Model name")
             }
             GridRow {
                 Color.clear.frame(width: 1, height: 1)
@@ -658,7 +673,7 @@ struct AIAgentCard: View {
             // Each provider has model names of its own: remember the one in use, and bring back the new provider's.
             settings.aiModels[old] = settings.aiModel
             settings.aiModel = settings.aiModels[new] ?? AIAgent.defaultModel(provider: new, custom: settings.aiBaseURL)
-            namingPreset = false
+            draft = nil
         }
         // Each address has a key of its own: show the one that belongs to the address now in the field.
         .onChange(of: settings.aiBaseURL) { testResult = nil; if AIAgent.keyAccount(provider: settings.aiProvider, baseURL: settings.aiBaseURL) != loadedAccount { loadKey() } }
@@ -666,28 +681,31 @@ struct AIAgentCard: View {
 
     // MARK: Presets
 
-    private func same(_ a: String, _ b: String) -> Bool {
-        guard let x = AIAgent.chatURL(from: a) else { return false }
-        return x == AIAgent.chatURL(from: b)
+    private func same(_ a: String, _ b: String) -> Bool { AIPreset.same(a, b) }
+
+    /// A field of the draft while a new preset is being filled in; the setting in use otherwise.
+    private func draftField(_ field: WritableKeyPath<AIPresetDraft, String>, else live: Binding<String>) -> Binding<String> {
+        guard draft != nil else { return live }
+        return Binding(get: { draft?[keyPath: field] ?? "" }, set: { draft?[keyPath: field] = $0 })
     }
 
-    /// The address in the field is a usable one that no preset holds yet, so it can be saved as one.
-    private var canSavePreset: Bool {
-        AIAgent.chatURL(from: settings.aiBaseURL) != nil
-            && !AIAgent.presets.contains { same($0.address, settings.aiBaseURL) }
-            && !saved.presets.contains { same($0.address, settings.aiBaseURL) }
+    private func problem(_ d: AIPresetDraft) -> AIPresetDraft.Problem? {
+        d.problem(takenAddresses: AIAgent.presets.map(\.address), reservedNames: (AIAgent.presets + AIAgent.providers).map(\.name), own: saved.presets)
     }
 
-    private func isBuiltInName(_ name: String) -> Bool {
-        (AIAgent.presets + AIAgent.providers).contains { $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespaces)) == .orderedSame }
-    }
-
+    /// Only here does the draft reach the settings in use: the preset is saved, its key filed under its address, and it becomes the one chosen.
     private func savePreset() {
-        let name = presetName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !isBuiltInName(name) else { return }
-        saved.add(AIPreset(name: name, address: settings.aiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                           model: settings.aiModel.trimmingCharacters(in: .whitespacesAndNewlines)))
-        namingPreset = false
+        guard let d = draft, problem(d) == nil else { return }
+        let preset = d.preset, newKey = d.key.trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.add(preset)
+        draft = nil
+        keySaver.flush() // whatever was typed for the address in use before
+        let account = AIAgent.keyAccount(provider: AIAgent.custom, baseURL: preset.address)
+        if !newKey.isEmpty, !KeysFile.set(newKey, for: account) { testResult = (false, "The key could not be saved.", false) }
+        let sameAccount = account == loadedAccount
+        settings.aiBaseURL = preset.address // a new host makes the key field reload, from the file just written
+        settings.aiModel = preset.model
+        if sameAccount, !newKey.isEmpty { storedKey = newKey; key = newKey }
     }
 
     private func remove(_ preset: AIPreset) {
@@ -717,12 +735,12 @@ struct AIAgentCard: View {
 
     /// One preset as a chip: click to use it. `onRemove` adds the × that only the user's own presets have.
     private func chip(_ name: String, address: String, model: String, onRemove: (() -> Void)?) -> some View {
-        let on = same(address, settings.aiBaseURL)
+        let on = same(address, draft?.address ?? settings.aiBaseURL)
         return HStack(spacing: 0) {
             Button {
                 settings.aiBaseURL = address
                 settings.aiModel = model
-                namingPreset = false
+                draft = nil
             } label: {
                 Text(name).lineLimit(1)
                     .padding(.leading, 9).padding(.trailing, onRemove == nil ? 9 : 3).frame(height: 22).contentShape(Rectangle())
@@ -783,8 +801,8 @@ struct AIAgentCard: View {
                 }
             }
         }
-        .disabled(testing)
-        .help("Asks the agent one short question to check that it answers")
+        .disabled(testing || draft != nil) // it asks the agent in use, not the preset being filled in
+        .help(draft != nil ? "Save the preset first, then test it" : "Asks the agent one short question to check that it answers")
     }
 }
 

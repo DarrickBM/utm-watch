@@ -26,6 +26,50 @@ public struct AIPreset: Codable, Equatable {
               let host = url.host, !host.isEmpty else { return nil }
         return host + (url.port.map { ":\($0)" } ?? "")
     }
+
+    /// The chat-completions address for what the user typed: a base address ("https://api.deepseek.com/v1"), with or
+    /// without a trailing slash, or the full address of the endpoint itself. nil when it is not a web address.
+    public static func chatURL(from typed: String) -> URL? {
+        var base = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base.removeLast() }
+        if base.hasSuffix("/chat/completions") { base.removeLast("/chat/completions".count) }
+        guard let url = URL(string: base + "/chat/completions"), url.scheme == "http" || url.scheme == "https", url.host != nil else { return nil }
+        return url
+    }
+
+    /// Two typed addresses that reach the same endpoint. An unusable address is the same as nothing.
+    public static func same(_ a: String, _ b: String) -> Bool {
+        guard let x = chatURL(from: a) else { return false }
+        return x == chatURL(from: b)
+    }
+}
+
+/// A preset being filled in. It is a draft of its own: nothing the app is using changes until it is saved.
+public struct AIPresetDraft: Equatable {
+    public var name = "", address = "", model = "", key = ""
+
+    public init(name: String = "", address: String = "", model: String = "", key: String = "") {
+        self.name = name; self.address = address; self.model = model; self.key = key
+    }
+
+    public enum Problem: Equatable { case noAddress, addressTaken, noName, nameBuiltIn, nameTaken }
+
+    /// What stands in the way of saving it, if anything. `takenAddresses` are the built-in presets' addresses,
+    /// `reservedNames` the names of built-in presets and providers, `own` the presets the user already has.
+    public func problem(takenAddresses: [String], reservedNames: [String], own: [AIPreset]) -> Problem? {
+        guard AIPreset.chatURL(from: address) != nil else { return .noAddress }
+        if (takenAddresses + own.map(\.address)).contains(where: { AIPreset.same($0, address) }) { return .addressTaken }
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n.isEmpty { return .noName }
+        if reservedNames.contains(where: { $0.caseInsensitiveCompare(n) == .orderedSame }) { return .nameBuiltIn }
+        if own.contains(where: { $0.name.caseInsensitiveCompare(n) == .orderedSame }) { return .nameTaken }
+        return nil
+    }
+
+    public var preset: AIPreset {
+        AIPreset(name: name.trimmingCharacters(in: .whitespacesAndNewlines), address: address.trimmingCharacters(in: .whitespacesAndNewlines),
+                 model: model.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 }
 
 /// The user's own presets, in a file beside the history database that can also be edited by hand:

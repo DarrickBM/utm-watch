@@ -942,6 +942,20 @@ do {
         .write(to: URL(fileURLWithPath: presetsPath))
     check(AIPresetsFile.load(path: presetsPath) == [AIPreset(name: "Kimi at work", address: "https://llm.example/v1/", model: "")],
           "a hand-edited file keeps its usable entries: the unnamed, the addressless, the unusable and the repeated name are skipped")
+    // A new preset is a draft of its own; these are the things that keep it from being saved.
+    let taken = ["http://localhost:11434/v1"], reserved = ["On this Mac", "Kimi"]
+    func why(_ d: AIPresetDraft) -> AIPresetDraft.Problem? { d.problem(takenAddresses: taken, reservedNames: reserved, own: mine) }
+    check(why(AIPresetDraft()) == .noAddress && why(AIPresetDraft(name: "x", address: "ddddadasdad")) == .noAddress, "a draft needs a web address before anything else")
+    check(why(AIPresetDraft(name: "x", address: "http://localhost:11434/v1/")) == .addressTaken
+          && why(AIPresetDraft(name: "x", address: "https://gateway.office.example/v1/chat/completions")) == .addressTaken,
+          "an address a preset already has cannot be saved again, however it is written")
+    check(why(AIPresetDraft(name: "  ", address: "https://new.example/v1")) == .noName && why(AIPresetDraft(name: "kimi", address: "https://new.example/v1")) == .nameBuiltIn
+          && why(AIPresetDraft(name: " office GATEWAY ", address: "https://new.example/v1")) == .nameTaken,
+          "a draft needs a name that is neither built in nor already one of the user's")
+    let fine = AIPresetDraft(name: " New one ", address: " https://new.example/v1 ", model: " m ", key: "k")
+    check(why(fine) == nil && fine.preset == AIPreset(name: "New one", address: "https://new.example/v1", model: "m"), "a good draft becomes a tidy preset, without its key")
+    check(AIPreset.chatURL(from: "https://a.example/v1/")?.absoluteString == "https://a.example/v1/chat/completions" && AIPreset.chatURL(from: "") == nil
+          && !AIPreset.same("", "") && AIPreset.same("https://a.example/v1", "https://a.example/v1/chat/completions"), "addresses are compared by the endpoint they reach")
     try? Data("{ not a list".utf8).write(to: URL(fileURLWithPath: presetsPath))
     check(AIPresetsFile.load(path: presetsPath).isEmpty, "an unreadable presets file is no presets, not a crash")
     try? FileManager.default.removeItem(atPath: dir)

@@ -171,13 +171,7 @@ final class AIAgent {
 
     /// The chat-completions address for what the user typed: a base address ("https://api.deepseek.com/v1"), with or
     /// without a trailing slash, or the full address of the endpoint itself.
-    static func chatURL(from typed: String) -> URL? {
-        var base = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        while base.hasSuffix("/") { base.removeLast() }
-        if base.hasSuffix("/chat/completions") { base.removeLast("/chat/completions".count) }
-        guard let url = URL(string: base + "/chat/completions"), url.scheme == "http" || url.scheme == "https", url.host != nil else { return nil }
-        return url
-    }
+    static func chatURL(from typed: String) -> URL? { AIPreset.chatURL(from: typed) }
 
     private static func runAPI(_ prompt: String, provider: String, model: String, baseURL: String) -> Result<String, Failure> {
         // Debug aid: `UTMWATCH_AI_KEY` supplies the key for one run, so a trial copy can be tested without saving a key.
