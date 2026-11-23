@@ -77,12 +77,16 @@ public enum AlertAI {
             let vm = String(key.dropFirst(3))
             targets.append((key, names[vm] ?? r.vms.first { $0.key == vm }?.name ?? vm))
         }
+        for key in r.probes.keys.sorted() where key.hasPrefix(ProbeTarget.routePrefix) {
+            let vm = String(key.dropFirst(ProbeTarget.routePrefix.count))
+            targets.append((key, "route back to " + (names[vm] ?? r.vms.first { $0.key == vm }?.name ?? vm) + " missing"))
+        }
         var slots: [Int64: [String: ProbePoint]] = [:]
         for (key, _) in targets { for pt in r.probes[key] ?? [] { slots[(pt.t - r.from) / width, default: [:]][key] = pt } }
         var linkAt: [Int64: LinkPoint] = [:]
         for l in r.link { linkAt[(l.t - r.from) / width] = l }
         guard !slots.isEmpty else { return [] }
-        var lines = ["", "Pings around the alert, lost of sent (each line covers \(Int(r.bucketMs / 1000)) s):"]
+        var lines = ["", "Pings around the alert, lost of sent (each line covers \(Int(r.bucketMs / 1000)) s). \"Route back to a VM missing\" counts checks where this Mac's route to the VM did not lead to the VM's bridge:"]
         var lastLink = ""
         for slot in slots.keys.sorted() {
             let row = slots[slot] ?? [:]

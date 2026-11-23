@@ -148,6 +148,9 @@ public enum ProbeTarget {
     public static let gateway = "gateway"
     public static let internet = "internet"
     public static func vm(_ key: String) -> String { "vm:" + key }
+    /// Whether this Mac's route to a VM leads to the VM's bridge: ok when it does. Carries no round-trip time.
+    public static func route(_ key: String) -> String { routePrefix + key }
+    public static let routePrefix = "route:"
     /// One internet server by address, e.g. "anchor:1.1.1.1".
     public static func anchor(_ address: String) -> String { anchorPrefix + address }
     public static let anchorPrefix = "anchor:"

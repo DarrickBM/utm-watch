@@ -782,6 +782,28 @@ do {
     for i in 112..<125 { quietChanges += quiet.ingest(probe(i, vmLost: true, gwLost: true)) }
     check(opened(quietChanges).map(\.rule) == ["vm_frozen"], "once a guest has answered, its silence is an issue")
 
+    // A VM the Mac has no route back to (a VPN took it): it still answers on its bridge, but it is cut off.
+    var routed = AlertEngine(rules: [AlertKind.vmUnrouted.spec.rule, AlertKind.vmFrozen.spec.rule])
+    _ = routed.ingest(AlertSample(t: t0, vms: [vm()], pressure: 0))
+    func round(_ i: Int, via: String?) -> AlertProbe {
+        let r = VMRoute(ip: "192.168.64.2", bridge: "bridge100", via: via, subnet: "192.168.64.0/24")
+        return AlertProbe(ProbeResult(timestamp: Date(ms: t0 + Int64(i) * 10_000), vmPing: ["A": 0.8], gatewayTried: true, gatewayMs: 3,
+                                      internetTried: true, internetMs: 8, link: LinkInfo(kind: "wifi", interface: "en1"), vmRoute: ["A": r]))
+    }
+    var routeChanges: [AlertChange] = []
+    for i in 0..<20 { routeChanges += routed.ingest(round(i, via: "bridge100")) }
+    check(routeChanges.isEmpty, "a VM whose route leads to its bridge raises nothing")
+    for i in 20..<30 { routeChanges += routed.ingest(round(i, via: "en1")) }
+    let cut = opened(routeChanges).first
+    check(opened(routeChanges).map(\.rule) == ["vm_unrouted"] && cut?.title == "macOS 26 is cut off from the network"
+          && cut?.what.contains("192.168.64.2 leaves by en1 instead of bridge100") == true && cut?.todo.contains("sudo route -n add -net 192.168.64.0/24 -interface bridge100") == true,
+          "a minute with the VM's route leaving by another interface is an issue that says where it goes and how to put it back")
+    routeChanges = []
+    routeChanges += routed.ingest(round(30, via: "bridge100"))
+    check(closed(routeChanges) == ["vm_unrouted|A"], "the issue ends as soon as the route leads to the bridge again")
+    check(AlertProbe(t: 0, linkKind: "wifi", vmRoute: ["A": .init(sent: 1, lost: 1)]).vmRoute["A"]?.lost == 1, "replayed history carries the route checks")
+    check(AlertEngine.unroutedText(name: "X", seen: nil).2.contains("Shut down every VM"), "without the live details the advice still says how to recover")
+
     // A 50-second outage in a healthy hour, as when a VPN restarts: not a poor connection, and too short for "Network is down".
     var blip = AlertEngine(rules: [AlertKind.poorConnection.spec.rule, AlertKind.networkDown.spec.rule])
     _ = blip.ingest(AlertSample(t: t0, vms: [vm()], pressure: 0))

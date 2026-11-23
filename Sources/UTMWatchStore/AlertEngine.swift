@@ -107,9 +107,15 @@ public struct AlertProbe {
     public var vmPing: [String: Count]
     public var gateway: Count?
     public var internet: Count?
+    /// Checks of the Mac's route back to each VM: lost when it did not lead to the VM's bridge.
+    public var vmRoute: [String: Count] = [:]
+    /// What the live checks saw, for the wording; replayed history has only the counts.
+    public var vmRouteSeen: [String: VMRoute] = [:]
 
-    public init(t: Int64, linkKind: String, rssi: Double? = nil, vmPing: [String: Count] = [:], gateway: Count? = nil, internet: Count? = nil) {
+    public init(t: Int64, linkKind: String, rssi: Double? = nil, vmPing: [String: Count] = [:], gateway: Count? = nil, internet: Count? = nil,
+                vmRoute: [String: Count] = [:]) {
         self.t = t; self.linkKind = linkKind; self.rssi = rssi; self.vmPing = vmPing; self.gateway = gateway; self.internet = internet
+        self.vmRoute = vmRoute
     }
 
     public init(_ p: ProbeResult) {
@@ -119,6 +125,8 @@ public struct AlertProbe {
         vmPing = p.vmPing.mapValues { Count(sent: 1, lost: $0 == nil ? 1 : 0) }
         gateway = p.gatewayTried ? Count(sent: 1, lost: p.gatewayMs == nil ? 1 : 0) : nil
         internet = p.internetTried ? Count(sent: 1, lost: p.internetMs == nil ? 1 : 0) : nil
+        vmRoute = p.vmRoute.mapValues { Count(sent: 1, lost: $0.ok ? 0 : 1) }
+        vmRouteSeen = p.vmRoute
     }
 }
 
@@ -361,13 +369,13 @@ public struct AlertEngine {
                          "Start it in UTM. If you stopped it yourself, say so and this alert goes away.")
                     }
                 }
-            case .wifi, .vmFrozen, .networkDown, .poorConnection:
+            case .wifi, .vmFrozen, .vmUnrouted, .networkDown, .poorConnection:
                 break // probe rules
             }
         }
 
         // A VM that is not running has no CPU to be busy and nothing to answer pings; its stop is the alert that matters.
-        for (key, a) in open where [AlertKind.cpu.rawValue, AlertKind.unusual.rawValue, AlertKind.vmFrozen.rawValue].contains(a.rule) && !runningNow.contains(a.subject) {
+        for (key, a) in open where [AlertKind.cpu.rawValue, AlertKind.unusual.rawValue, AlertKind.vmFrozen.rawValue, AlertKind.vmUnrouted.rawValue].contains(a.rule) && !runningNow.contains(a.subject) {
             open[key] = nil; tracks[key] = nil
             out.append(.closed(key: key, at: s.t))
         }
@@ -428,6 +436,14 @@ public struct AlertEngine {
                          "Open the VM in UTM and check it. A guest that sleeps on purpose can be left out of this rule.")
                     }
                 }
+            case .vmUnrouted:
+                for (key, c) in p.vmRoute where !rule.excluded.contains(key) && runningNow.contains(key) && c.sent > 0 {
+                    let name = everRan[key] ?? key
+                    let seen = p.vmRouteSeen[key]
+                    step(rule, key, key, p.t, bad: c.lost == c.sent, hold: hold, clear: 0, out: &out) { _ in
+                        AlertEngine.unroutedText(name: name, seen: seen)
+                    }
+                }
             case .networkDown:
                 let routerAnswered = self.routerAnswered
                 step(rule, Alert.host, nil, p.t, bad: pings.last?.dead ?? false, hold: hold, clear: min(hold, 60_000), out: &out) { _ in
@@ -470,7 +486,25 @@ public struct AlertEngine {
 
     // MARK: The lifecycle every rule shares
 
-    private static let probeKinds: Set<String> = Set([AlertKind.wifi, .vmFrozen, .networkDown, .poorConnection].map(\.rawValue))
+    private static let probeKinds: Set<String> = Set([AlertKind.wifi, .vmFrozen, .vmUnrouted, .networkDown, .poorConnection].map(\.rawValue))
+
+    /// Title, what and what to do for a VM this Mac has no route back to.
+    public static func unroutedText(name: String, seen: VMRoute?) -> (String, String, String) {
+        let path: String
+        if let s = seen {
+            path = "Traffic for its address \(s.ip) leaves by \(s.via ?? "no interface") instead of \(s.bridge), its own network"
+        } else {
+            path = "Traffic for its address does not lead to its own network"
+        }
+        let what = "\(path). Everything the VM sends out through this Mac gets its replies sent the wrong way, so the VM is cut off from the internet and the rest of the network while it keeps running."
+        let fix: String
+        if let s = seen, let subnet = s.subnet {
+            fix = "Put the route back with \"sudo route -n add -net \(subnet) -interface \(s.bridge)\", or shut down every VM and start them again so macOS sets up the VM network afresh."
+        } else {
+            fix = "Shut down every VM and start them again so macOS sets up the VM network afresh."
+        }
+        return ("\(name) is cut off from the network", what, fix)
+    }
 
     private mutating func step(_ rule: AlertRule, _ subject: String, _ vmKey: String?, _ t: Int64, bad: Bool?, hold: Int64, clear: Int64,
                                out: inout [AlertChange], text: (String) -> (String, String, String)) {

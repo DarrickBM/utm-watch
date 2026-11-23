@@ -16,6 +16,7 @@ public enum AlertKind: String, Codable, CaseIterable, Equatable {
     case unusual
     case vmStopped = "vm_stopped"
     case vmFrozen = "vm_frozen"
+    case vmUnrouted = "vm_unrouted"
     case vmDiskFull = "vm_disk_full"
     case macDiskFull = "mac_disk_full"
     case memoryCritical = "memory_critical"
@@ -168,6 +169,10 @@ public extension AlertKind {
         case .vmFrozen:
             return Spec(prefix: "When a running VM gives no ping reply for", middle: "", unit: "", step: 0, range: 0...0, ladder: AlertKind.holds,
                         scope: "every VM", perVM: true, chartLabel: "Pings to VMs without a reply", higherIsWorse: true,
+                        rule: AlertRule(kind: self, level: .issue, value: nil, minutes: 1))
+        case .vmUnrouted:
+            return Spec(prefix: "When this Mac has no route back to a running VM for", middle: "", unit: "", step: 0, range: 0...0, ladder: AlertKind.holds,
+                        scope: "every VM", perVM: true, chartLabel: "VMs this Mac has no route back to", higherIsWorse: true,
                         rule: AlertRule(kind: self, level: .issue, value: nil, minutes: 1))
         case .vmDiskFull:
             return Spec(prefix: "When a VM's disk is more than", middle: "full for", unit: "%", step: 1, range: 90...100, ladder: AlertKind.holds,

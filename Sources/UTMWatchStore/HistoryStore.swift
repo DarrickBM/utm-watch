@@ -160,6 +160,9 @@ public final class HistoryStore {
                     for (key, rtt) in p.vmPing {
                         insProbe.bind(1, ProbeTarget.vm(key)).bind(2, ts).bind(3, rtt).bind(4, Int64(rtt == nil ? 0 : 1)).run()
                     }
+                    for (key, r) in p.vmRoute {
+                        insProbe.bind(1, ProbeTarget.route(key)).bind(2, ts).bind(3, nil as Double?).bind(4, Int64(r.ok ? 1 : 0)).run()
+                    }
                     if p.gatewayTried { insProbe.bind(1, ProbeTarget.gateway).bind(2, ts).bind(3, p.gatewayMs).bind(4, Int64(p.gatewayMs == nil ? 0 : 1)).run() }
                     if p.internetTried { insProbe.bind(1, ProbeTarget.internet).bind(2, ts).bind(3, p.internetMs).bind(4, Int64(p.internetMs == nil ? 0 : 1)).run() }
                     for (address, rtt) in p.anchorMs {

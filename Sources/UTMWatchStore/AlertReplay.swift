@@ -85,6 +85,7 @@ public enum AlertReplay {
                 if target == ProbeTarget.gateway { probe.gateway = c }
                 else if target == ProbeTarget.internet { probe.internet = c }
                 else if target.hasPrefix("vm:") { probe.vmPing[String(target.dropFirst(3))] = c }
+                else if target.hasPrefix(ProbeTarget.routePrefix) { probe.vmRoute[String(target.dropFirst(ProbeTarget.routePrefix.count))] = c }
                 probeSlots[i] = probe
             }
         }
@@ -157,6 +158,11 @@ public enum AlertReplay {
         case .vmFrozen:
             for p in tl.probes {
                 let sent = p.vmPing.values.reduce(0) { $0 + $1.sent }, lost = p.vmPing.values.reduce(0) { $0 + $1.lost }
+                if sent > 0 { put(p.t, Double(lost) / Double(sent)) }
+            }
+        case .vmUnrouted:
+            for p in tl.probes {
+                let sent = p.vmRoute.values.reduce(0) { $0 + $1.sent }, lost = p.vmRoute.values.reduce(0) { $0 + $1.lost }
                 if sent > 0 { put(p.t, Double(lost) / Double(sent)) }
             }
         case .networkDown, .poorConnection:
