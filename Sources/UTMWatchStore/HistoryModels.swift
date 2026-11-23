@@ -105,7 +105,7 @@ public struct HistoryEvent: Equatable, Codable {
         self.ts = ts; self.kind = kind; self.vmKey = vmKey; self.label = label; self.detail = detail
     }
 
-    public static let warningKinds: Set<String> = ["pressure_warning", "pressure_critical", "swap_high", "cpu_limit", "disk_high", "link_weak", "link_down", "sleep"]
+    public static let warningKinds: Set<String> = ["pressure_warning", "pressure_critical", "swap_high", "cpu_limit", "disk_high", "link_weak", "link_down", "network_outage", "sleep"]
     /// An alert opening, as a risk or as an issue, and ending.
     public static let alertRisk = "alert_risk", alertIssue = "alert_issue", alertEnd = "alert_end"
     public var isWarning: Bool { HistoryEvent.warningKinds.contains(kind) || kind == HistoryEvent.alertRisk || kind == HistoryEvent.alertIssue }

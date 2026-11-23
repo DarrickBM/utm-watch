@@ -344,7 +344,9 @@ final class AlertCenter: NSObject, ObservableObject, UNUserNotificationCenterDel
             let now = Date().msSince1970
             self.io.async {
                 let h = store.load(from: alert.opened - 2 * 3600_000, to: now, maxPoints: 26)
-                let prompt = AlertAI.investigatePrompt(evidence: AlertAI.evidence(for: alert, history: h, others: Array(others)))
+                // The last minutes at full detail: the long view is minute rollups, which lag behind and blur short outages.
+                let recent = store.load(from: max(alert.opened - 10 * 60_000, now - 30 * 60_000), to: now, maxPoints: 60)
+                let prompt = AlertAI.investigatePrompt(evidence: AlertAI.evidence(for: alert, history: h, recent: recent, others: Array(others)))
                 self.agent.run(prompt) { result in
                     self.investigating.remove(key)
                     guard case .success(let reply) = result, let text = AlertAI.finding(from: reply), var a = self.engine.open[key] else { return }

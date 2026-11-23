@@ -157,7 +157,15 @@ public struct AlertEngine {
     private var runningNow: Set<String> = []
     private var answered: Set<String> = []                           // running VMs that have answered a ping
     private var absentSince: [String: Int64] = [:]                   // VMs that ran once and are no longer listed at all
-    private var pings: [(t: Int64, gateway: AlertProbe.Count?, internet: AlertProbe.Count?)] = []
+    /// One probe round of the router and internet pings. `dead` when neither answered (or there was no network at all).
+    private struct Round {
+        var t: Int64
+        var gateway: AlertProbe.Count?
+        var internet: AlertProbe.Count?
+        var dead: Bool
+    }
+    private var pings: [Round] = []
+    private var routerAnswered = false                               // some routers never answer pings
     private var lastSample: Int64?
     private var lastProbe: Int64?
     private var lastDiskFree: Double?
@@ -391,8 +399,12 @@ public struct AlertEngine {
         var out: [AlertChange] = []
         if let last = lastProbe, p.t - last > AlertEngine.gapMs { resetPending(probeRules: true); pings.removeAll() }
         lastProbe = p.t
-        pings.append((p.t, p.gateway, p.internet))
+        func silent(_ c: AlertProbe.Count?) -> Bool { c.map { $0.sent > 0 && $0.lost == $0.sent } ?? true }
+        let noLink = p.linkKind == "none"
+        pings.append(Round(t: p.t, gateway: p.gateway, internet: p.internet,
+                           dead: noLink || ((p.gateway != nil || p.internet != nil) && silent(p.gateway) && silent(p.internet))))
         pings.removeAll { $0.t < p.t - 1440 * 60_000 }
+        if let g = p.gateway, g.lost < g.sent { routerAnswered = true }
 
         for rule in rules where rule.enabled {
             let hold = Int64(rule.minutes) * 60_000
@@ -412,22 +424,24 @@ public struct AlertEngine {
                     let name = everRan[key] ?? key
                     let since = tracks[Alert.key(rule: rule.id, subject: key)]?.badSince ?? p.t
                     step(rule, key, key, p.t, bad: c.lost == c.sent, hold: hold, clear: 0, out: &out) { _ in
-                        ("\(name) is not responding", "It is running but has not answered a ping since \(AlertEngine.clock(since)). The guest may be frozen, asleep, or its network may be down.",
+                        ("\(name) is not responding", "It is running but has not answered a ping since \(AlertEngine.clock(since)).",
                          "Open the VM in UTM and check it. A guest that sleeps on purpose can be left out of this rule.")
                     }
                 }
             case .networkDown:
-                let noLink = p.linkKind == "none"
-                let dead = (p.gateway.map { $0.sent > 0 && $0.lost == $0.sent } ?? false) && (p.internet.map { $0.sent > 0 && $0.lost == $0.sent } ?? true)
-                step(rule, Alert.host, nil, p.t, bad: noLink || dead, hold: hold, clear: min(hold, 60_000), out: &out) { _ in
+                let routerAnswered = self.routerAnswered
+                step(rule, Alert.host, nil, p.t, bad: pings.last?.dead ?? false, hold: hold, clear: min(hold, 60_000), out: &out) { _ in
                     ("Network is down", noLink ? "This Mac has no network connection. Nothing outside can reach the VMs."
                                                : "Neither the router nor the internet answers. Nothing outside can reach the VMs.",
-                     "Check the cable or Wi-Fi, then the router.")
+                     noLink ? "Connect this Mac to a network."
+                            : routerAnswered ? "The router stopped answering too, so the break is on this Mac or between it and the router."
+                                             : "This router never answers pings, so whether the break is before or beyond it cannot be told from here.")
                 }
             case .poorConnection:
                 guard let limit = rule.value else { continue }
-                let window = pings.filter { $0.t > p.t - hold }
-                func loss(_ pick: ((t: Int64, gateway: AlertProbe.Count?, internet: AlertProbe.Count?)) -> AlertProbe.Count?) -> Double? {
+                // An outage, where nothing answers for a while, belongs to "Network is down". Only scattered loss is "poor".
+                let window = AlertEngine.withoutOutages(pings).filter { $0.t > p.t - hold }
+                func loss(_ pick: (Round) -> AlertProbe.Count?) -> Double? {
                     let sent = window.reduce(0) { $0 + (pick($1)?.sent ?? 0) }, lost = window.reduce(0) { $0 + (pick($1)?.lost ?? 0) }
                     return sent >= 4 ? Double(lost) / Double(sent) : nil
                 }
@@ -441,10 +455,10 @@ public struct AlertEngine {
                 let routerLossy = router.map { $0 < 1 && $0 * 100 > limit } ?? false
                 let routerSilent = router == 1
                 step(rule, Alert.host, nil, p.t, bad: bad, hold: 0, clear: 60_000, out: &out) { _ in
-                    ("Connection is poor", "\(Int(((worst ?? 0) * 100).rounded()))% of pings to \(routerLossy ? "the router" : "the internet") were lost over the last \(AlertRule.duration(rule.minutes)). Remote sessions to the VMs will lag or drop.",
-                     routerLossy ? "The trouble is between this Mac and the router: check the Wi-Fi signal or the cable."
-                                 : routerSilent ? "The router does not answer pings, so it cannot be told which side loses them: check the Wi-Fi signal or cable, then the internet line."
-                                                : "The router answers, so the trouble is beyond it: check the internet line.")
+                    ("Connection is poor", "\(Int(((worst ?? 0) * 100).rounded()))% of pings to \(routerLossy ? "the router" : "the internet") were lost over the last \(AlertRule.duration(rule.minutes)), in scattered gaps rather than one outage. Remote sessions to the VMs will lag or drop.",
+                     routerLossy ? "Pings to the router are lost too, so the loss is between this Mac and the router."
+                                 : routerSilent ? "This router never answers pings, so whether the loss is before or beyond it cannot be told from here."
+                                                : "The router answers, so the loss is beyond the router.")
                 }
             default:
                 break
@@ -529,6 +543,24 @@ public struct AlertEngine {
     }
 
     // MARK: Small helpers
+
+    /// A run of rounds in which nothing answered, long enough to be an outage rather than a few lost pings.
+    static let outageRounds = 3
+
+    /// The rounds left once outages are taken out: runs of dead rounds with at least `outageRounds` rounds or pings in them.
+    private static func withoutOutages(_ rounds: [Round]) -> [Round] {
+        var keep: [Round] = [], run: [Round] = []
+        func endRun() {
+            let pinged = run.reduce(0) { $0 + max($1.gateway?.sent ?? 0, $1.internet?.sent ?? 0) }
+            if run.count < outageRounds && pinged < outageRounds { keep += run }
+            run = []
+        }
+        for r in rounds {
+            if r.dead { run.append(r) } else { endRun(); keep.append(r) }
+        }
+        endRun()
+        return keep
+    }
 
     private static func record(_ store: inout [String: [(t: Int64, v: Double)]], _ key: String, _ t: Int64, _ v: Double, every: Int64, keep: Int64) {
         var list = store[key] ?? []

@@ -295,7 +295,7 @@ let tools: [[String: Any]] = [
      "description": "The latest recorded sample (at most about 10 seconds old while UTM Watch is running): each VM's CPU, memory, network, disk and ping time, the Mac's memory headroom, swap, memory pressure and CPU load, and its network link with router and internet ping.",
      "inputSchema": ["type": "object", "properties": [String: Any]()]],
     ["name": "list_events",
-     "description": "Timeline events in a range: VM started or stopped, memory pressure changes, swap above 80%, a VM at its CPU limit, Wi-Fi weak or recovered, network link changed or down, Mac went to sleep or woke. Warning events include the busiest processes recorded when they fired.",
+     "description": "Timeline events in a range: VM started or stopped, memory pressure changes, swap above 80%, a VM at its CPU limit, Wi-Fi weak or recovered, network link changed or down, outages where neither the router nor the internet answered (with their length), Mac went to sleep or woke. Warning events include the busiest processes recorded when they fired.",
      "inputSchema": ["type": "object", "properties": [
         "from": ["type": "string", "description": "Start of the range. Default -24h. " + timeHelp],
         "to": ["type": "string", "description": "End of the range. Default now."]]]],

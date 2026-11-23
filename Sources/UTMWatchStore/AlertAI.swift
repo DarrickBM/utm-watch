@@ -7,7 +7,8 @@ public enum AlertAI {
     // MARK: Looking into an alert
 
     /// The readings around an alert as plain text: one line every few minutes for the hours before it, and the events.
-    public static func evidence(for alert: Alert, history h: History, others: [Alert]) -> String {
+    /// `recent`, read at full detail around the moment it opened, adds the pings and the network link round by round.
+    public static func evidence(for alert: Alert, history h: History, recent: History? = nil, others: [Alert]) -> String {
         let stamp = DateFormatter(); stamp.dateFormat = "yyyy-MM-dd HH:mm"
         let clock = DateFormatter(); clock.dateFormat = "HH:mm"
         func gb(_ v: Double?) -> String { v.map { String(format: "%.1f", $0 / 1_073_741_824) } ?? "?" }
@@ -47,9 +48,10 @@ public enum AlertAI {
             let sent = points.reduce(0) { $0 + $1.sent }, lost = points.reduce(0) { $0 + $1.lost }
             lines.append("Pings to the \(target == ProbeTarget.gateway ? "router" : "internet") over this time: \(lost) of \(sent) lost.")
         }
-        if let last = h.link.last {
-            lines.append("Network link: \(last.kind)" + (last.rssi.map { ", Wi-Fi signal \(Int($0.rounded())) dBm" } ?? ""))
+        if let last = (recent?.link.last ?? h.link.last) {
+            lines.append("Network link: \(last.kind)" + (last.interface.map { " on \($0)" } ?? "") + (last.rssi.map { ", Wi-Fi signal \(Int($0.rounded())) dBm" } ?? ""))
         }
+        if let r = recent { lines += pingLines(r, names: names) }
         if !h.events.isEmpty {
             lines.append("")
             lines.append("Timeline events:")
@@ -64,6 +66,35 @@ public enum AlertAI {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// One line per slot of `r`: lost of sent for the router, the internet and each VM, and the link when it changed.
+    static func pingLines(_ r: History, names: [String: String]) -> [String] {
+        let width = max(1, Int64(r.bucketMs))
+        let clock = DateFormatter(); clock.dateFormat = "HH:mm:ss"
+        var targets: [(String, String)] = [(ProbeTarget.gateway, "router"), (ProbeTarget.internet, "internet")]
+        for key in r.probes.keys.sorted() where key.hasPrefix("vm:") {
+            let vm = String(key.dropFirst(3))
+            targets.append((key, names[vm] ?? r.vms.first { $0.key == vm }?.name ?? vm))
+        }
+        var slots: [Int64: [String: ProbePoint]] = [:]
+        for (key, _) in targets { for pt in r.probes[key] ?? [] { slots[(pt.t - r.from) / width, default: [:]][key] = pt } }
+        var linkAt: [Int64: LinkPoint] = [:]
+        for l in r.link { linkAt[(l.t - r.from) / width] = l }
+        guard !slots.isEmpty else { return [] }
+        var lines = ["", "Pings around the alert, lost of sent (each line covers \(Int(r.bucketMs / 1000)) s):"]
+        var lastLink = ""
+        for slot in slots.keys.sorted() {
+            let row = slots[slot] ?? [:]
+            var parts = [clock.string(from: Date(ms: r.from + slot * width))]
+            for (key, name) in targets { if let pt = row[key] { parts.append("\(name) \(pt.lost)/\(pt.sent)") } }
+            if let l = linkAt[slot] {
+                let link = l.kind + (l.interface.map { " on \($0)" } ?? "")
+                if link != lastLink { parts.append("link \(link)"); lastLink = link }
+            }
+            lines.append(parts.joined(separator: ", "))
+        }
+        return lines
     }
 
     public static func investigatePrompt(evidence: String) -> String {

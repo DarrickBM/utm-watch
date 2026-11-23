@@ -331,6 +331,24 @@ do {
     check(det.ingest(probe("wifi", -60)).map(\.kind) == ["link_recovered"], "recovery detected")
     check(det.ingest(probe("ethernet", nil)).map(\.kind) == ["link_changed"], "link type change detected")
     check(det.ingest(probe("none", nil)).map(\.kind) == ["link_down"], "link loss detected")
+
+    // Interfaces are named, and a change of interface with the same kind of link (a VPN tunnel taking over) is an event too.
+    var vpn = EventDetector()
+    func round(_ i: Int, _ kind: String = "wifi", _ iface: String = "en1", answered: Bool = true) -> ProbeResult {
+        ProbeResult(timestamp: start.addingTimeInterval(Double(i) * 10), vmPing: [:], gatewayTried: true, gatewayMs: answered ? 3 : nil,
+                    internetTried: true, internetMs: answered ? 20 : nil, link: LinkInfo(kind: kind, interface: iface))
+    }
+    _ = vpn.ingest(round(0))
+    check(vpn.ingest(round(1, "other", "utun16")).map(\.label) == ["Network link: Wi-Fi (en1) to other (utun16)"], "a link change names both interfaces")
+    check(vpn.ingest(round(2, "other", "utun17")).map(\.kind) == ["link_changed"], "a new interface of the same kind is a change")
+    var outage: [HistoryEvent] = []
+    for i in 3..<5 { outage += vpn.ingest(round(i, "other", "utun17", answered: false)) }
+    outage += vpn.ingest(round(5, "other", "utun17"))
+    check(outage.isEmpty, "two rounds without a reply are not an outage")
+    for i in 6..<11 { outage += vpn.ingest(round(i, "other", "utun17", answered: false)) }
+    outage += vpn.ingest(round(11, "other", "utun17"))
+    check(outage.map(\.label) == ["No reply from the router or the internet for 50 s"] && outage.first?.ts == start.addingTimeInterval(60).msSince1970 && outage.first?.isWarning == true,
+          "an outage is logged once it is over, from when it began, with its length")
 }
 
 do {
@@ -739,6 +757,7 @@ do {
     for i in 70..<120 { net += n.ingest(probe(i, inetLost: i % 4 == 0)) }
     check(opened(net).map(\.rule) == ["poor_connection"] && opened(net).first?.what.contains("the internet") == true && opened(net).first?.todo.contains("router answers") == true,
           "a quarter of pings lost is a poor connection, and the alert says which side")
+    check(opened(net).first.map { !$0.todo.contains("check") && !$0.what.contains("may be") } == true, "the alert states what was measured, without guessing causes")
     ended += closed(net); net = []
     for i in 120..<200 { net += n.ingest(probe(i)) }
     ended += closed(net)
@@ -756,12 +775,25 @@ do {
     for i in 0..<60 { quietChanges += quiet.ingest(probe(i, vmLost: true, gwLost: true)) }
     check(quietChanges.isEmpty, "a guest and a router that have never answered a ping raise nothing")
     for i in 60..<110 { quietChanges += quiet.ingest(probe(i, vmLost: true, gwLost: true, inetLost: i % 3 == 0)) }
-    check(opened(quietChanges).map(\.rule) == ["poor_connection"] && opened(quietChanges).first?.todo.contains("does not answer pings") == true,
+    check(opened(quietChanges).map(\.rule) == ["poor_connection"] && opened(quietChanges).first?.todo.contains("never answers pings") == true,
           "internet loss still shows behind a router that never answers pings")
     quietChanges = []
     for i in 110..<112 { quietChanges += quiet.ingest(probe(i, gwLost: true)) }
     for i in 112..<125 { quietChanges += quiet.ingest(probe(i, vmLost: true, gwLost: true)) }
     check(opened(quietChanges).map(\.rule) == ["vm_frozen"], "once a guest has answered, its silence is an issue")
+
+    // A 50-second outage in a healthy hour, as when a VPN restarts: not a poor connection, and too short for "Network is down".
+    var blip = AlertEngine(rules: [AlertKind.poorConnection.spec.rule, AlertKind.networkDown.spec.rule])
+    _ = blip.ingest(AlertSample(t: t0, vms: [vm()], pressure: 0))
+    var blipChanges: [AlertChange] = []
+    for i in 0..<60 { blipChanges += blip.ingest(probe(i)) }
+    for i in 60..<65 { blipChanges += blip.ingest(probe(i, gwLost: true, inetLost: true)) }
+    for i in 65..<120 { blipChanges += blip.ingest(probe(i)) }
+    check(blipChanges.isEmpty, "a short outage is neither a poor connection nor the network down")
+    for i in 120..<130 { blipChanges += blip.ingest(probe(i, gwLost: true, inetLost: true)) }
+    let down = opened(blipChanges).first
+    check(opened(blipChanges).map(\.rule) == ["network_down"] && down?.todo.contains("router stopped answering") == true,
+          "a longer outage is the network down, not also a poor connection, and says where the break is")
 
     // A VM that is no longer listed at all.
     var gone = AlertEngine(rules: [AlertKind.vmDisk.spec.rule, AlertKind.vmStopped.spec.rule])
@@ -855,6 +887,18 @@ do {
 
         // What the agent is told, and reading what it says back.
         let evidence = AlertAI.evidence(for: a, history: store.load(from: t0, to: t0 + 3600_000, maxPoints: 12), others: [b])
+        // Round by round around the alert: the pings, and the link with its interface, so a short outage and a VPN show.
+        var rounds: [ProbeResult] = []
+        for i in 0..<18 {
+            let up = !(6..<11).contains(i)
+            rounds.append(ProbeResult(timestamp: start.addingTimeInterval(Double(i) * 10), vmPing: ["A": up ? 1 : nil], gatewayTried: true, gatewayMs: up ? 3 : nil,
+                                      internetTried: true, internetMs: up ? 20 : nil, link: LinkInfo(kind: i < 6 ? "wifi" : "other", interface: i < 6 ? "en1" : "utun16")))
+        }
+        store.write(snapshots: [], probes: rounds)
+        let close = AlertAI.evidence(for: a, history: store.load(from: t0, to: t0 + 3600_000, maxPoints: 12),
+                                     recent: store.load(from: t0, to: t0 + 180_000, maxPoints: 18), others: [])
+        check(close.contains("Pings around the alert") && close.contains("router 1/1") && close.contains("macOS 26 1/1") && close.contains("link other on utun16"),
+              "the agent sees each round's pings and the link's interface around the alert")
         check(evidence.contains("Issue \"macOS 26 stopped\"") && evidence.contains("Mac disk 2") && evidence.contains("macOS 26: CPU") && evidence.contains("macOS 26: not running") && evidence.contains("Memory is short"),
               "the agent is given the alert, the readings before it and the other open alerts")
         check(AlertAI.investigatePrompt(evidence: evidence).contains("not instructions"), "the prompt marks the evidence as data")

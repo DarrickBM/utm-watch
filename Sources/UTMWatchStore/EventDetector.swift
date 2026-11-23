@@ -19,6 +19,10 @@ public struct EventDetector {
     private var diskHigh: Set<String> = []
 
     private var linkKind: String?
+    private var linkInterface: String?
+    private var silentSince: Int64?                // first of the current run of rounds where nothing answered
+    private var silentRounds = 0
+    private var lastProbe: Int64?
     private var weakCount = 0
     private var linkWeak = false
 
@@ -34,21 +38,43 @@ public struct EventDetector {
     /// The VMs whose disks were already nearly full when recording last stopped.
     public mutating func seed(diskHigh keys: Set<String>) { diskHigh = keys }
 
-    /// Link events from a probe round: the link going away or changing type, and Wi-Fi turning weak.
+    /// Link events from a probe round: the link going away or changing, Wi-Fi turning weak, and outages where nothing answered.
     public mutating func ingest(_ p: ProbeResult) -> [HistoryEvent] {
         var out: [HistoryEvent] = []
         let ts = p.timestamp.msSince1970
         let kind = p.link.kind
-        if let old = linkKind, old != kind {
-            func name(_ k: String) -> String { k == "wifi" ? "Wi-Fi" : k == "ethernet" ? "Ethernet" : k == "none" ? "no network" : k }
+        let interface = kind == "none" ? nil : p.link.interface
+        if let old = linkKind, old != kind || (kind != "none" && linkInterface != interface) {
+            func name(_ k: String, _ i: String?) -> String {
+                let n = k == "wifi" ? "Wi-Fi" : k == "ethernet" ? "Ethernet" : k == "none" ? "no network" : k
+                return i.map { "\(n) (\($0))" } ?? n
+            }
             if kind == "none" {
                 out.append(HistoryEvent(ts: ts, kind: "link_down", vmKey: nil, label: "Network link down"))
             } else {
-                out.append(HistoryEvent(ts: ts, kind: "link_changed", vmKey: nil, label: "Network link: \(name(old)) to \(name(kind))"))
+                out.append(HistoryEvent(ts: ts, kind: "link_changed", vmKey: nil, label: "Network link: \(name(old, linkInterface)) to \(name(kind, interface))"))
             }
             weakCount = 0; linkWeak = false
         }
         linkKind = kind
+        linkInterface = interface
+
+        // An outage: rounds in a row where neither the router nor the internet answered. Logged once it is over, with its length.
+        if let last = lastProbe, ts - last > 150_000 { silentSince = nil; silentRounds = 0 }   // the Mac slept; nothing carries over
+        lastProbe = ts
+        let tried = p.gatewayTried || p.internetTried
+        let silent = kind == "none" || (tried && p.gatewayMs == nil && p.internetMs == nil)
+        if silent {
+            if silentSince == nil { silentSince = ts }
+            silentRounds += 1
+        } else if let since = silentSince {
+            if silentRounds >= 3 {
+                let seconds = Int(((ts - since) / 1000))
+                let length = seconds < 120 ? "\(seconds) s" : "\(Int((Double(seconds) / 60).rounded())) min"
+                out.append(HistoryEvent(ts: since, kind: "network_outage", vmKey: nil, label: "No reply from the router or the internet for \(length)"))
+            }
+            silentSince = nil; silentRounds = 0
+        }
         if kind == "wifi", let rssi = p.link.rssi {
             // Two readings in a row, and a 5 dB gap to clear, so a single dip does not raise an event.
             if Double(rssi) <= Diagnostics.weakWiFiRSSI { weakCount += 1 } else { weakCount = 0 }
