@@ -1057,5 +1057,48 @@ do {
     check(!opened.contains { $0.rule.hasPrefix("vm_disk") }, "its disk is left to the Mac disk rules, not alerted twice as a VM's")
 }
 
+// MARK: Disk images: ASIF (macOS 26 and later, where diskutil can make one)
+do {
+    func run(_ args: [String]) -> String? {
+        let p = Process(), out = Pipe()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+        p.arguments = args
+        p.standardOutput = out; p.standardError = Pipe()
+        guard (try? p.run()) != nil else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+    }
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("utmwatch-asif-\(getpid())")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let image = dir.appendingPathComponent("t.asif")
+    if run(["image", "create", "blank", "--fs", "APFS", "--format", "ASIF", "--size", "2g", "--volumeName", "UWT", image.path]) != nil,
+       let attach = run(["image", "attach", image.path]),
+       let line = attach.split(separator: "\n").first(where: { $0.contains("/Volumes/") }),
+       let at = line.range(of: "/Volumes/") {
+        let mount = String(line[at.lowerBound...]).trimmingCharacters(in: .whitespaces)
+        // Some data, so the reading has something to count beyond an empty filesystem.
+        let blob = Data(count: 300 << 20)
+        try? blob.write(to: URL(fileURLWithPath: mount).appendingPathComponent("blob"))
+        // And some freed again, so discarded chunks and sectors are read as such.
+        let gone = URL(fileURLWithPath: mount).appendingPathComponent("gone")
+        try? Data(count: 200 << 20).write(to: gone)
+        try? FileManager.default.removeItem(at: gone)
+        sync()
+        var fs = statfs()
+        let gotStat = statfs(mount, &fs) == 0
+        let containerUsed = gotStat ? (UInt64(fs.f_blocks) - UInt64(fs.f_bfree)) * UInt64(fs.f_bsize) : 0
+        _ = run(["eject", mount])
+        let u = DiskImages.usage(image: image)
+        check(u?.source == "APFS" && u?.exact == true, "an APFS disk inside an ASIF image is read from the filesystem, not the file size")
+        check((u?.sizeBytes ?? 0) > 1_900_000_000 && (u?.sizeBytes ?? 0) <= 2_000_000_000, "its size is the disk's, not the file's")
+        let used = Double(u?.usedBytes ?? 0)
+        check(used > 300e6 && (!gotStat || abs(used - Double(containerUsed)) < 64e6), "in use: the 300 MB written, close to what the mounted volume reports")
+    } else {
+        print("skip: diskutil cannot make ASIF images here")
+    }
+}
+
 print("\(checks - failures)/\(checks) checks passed")
 exit(failures == 0 ? 0 : 1)

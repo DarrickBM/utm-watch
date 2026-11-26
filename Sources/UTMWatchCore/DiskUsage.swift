@@ -63,6 +63,15 @@ public enum DiskImages {
                 return DiskUsage(usedBytes: min(onMac, diskSize), sizeBytes: diskSize, exact: false, source: "image")
             }
             disk = q
+        } else if let head = file.read(0, 4), head == Array("shdw".utf8) {
+            // ASIF (macOS 26's sparse format, which UTM uses for new Apple-backend VMs): the file is as big as what has
+            // been written, and the disk's size is in the header.
+            guard let a = AsifSource(file: file) else {
+                let size = max(1, (file.read(0x30, 8)?.be64(0) ?? 0) &* 512)
+                return DiskUsage(usedBytes: min(onMac, size), sizeBytes: size, exact: false, source: "image")
+            }
+            disk = a
+            diskSize = a.size
         }
         if let fs = Filesystems.mainFilesystem(disk), fs.total > 0, fs.used <= fs.total, fs.total <= diskSize {
             return DiskUsage(usedBytes: fs.used, sizeBytes: fs.total, exact: true, source: fs.kind)
@@ -186,6 +195,124 @@ final class Qcow2Source: ByteSource {
             pos += UInt64(n)
         }
         return out
+    }
+}
+
+/// The disk an ASIF file holds (Apple Sparse Image Format, macOS 26). Two levels of indirection: the newer of two
+/// directories lists tables; a table is a run of chunk-groups, each holding the file chunks of `4 × block size` disk
+/// chunks and one bitmap chunk. A disk chunk is unwritten (zeros), fully written, or partly written, in which case the
+/// bitmap gives each sector's state in 2 bits. Layout per https://github.com/huven/asif-format, checked against images
+/// made by `diskutil image create --format ASIF`.
+final class AsifSource: ByteSource {
+    let file: ByteSource
+    let size: UInt64
+    private let chunk: UInt64, block: UInt64
+    private let perGroup: UInt64     // N: disk chunks per chunk-group
+    private let groupBytes: UInt64   // S: bytes one chunk-group takes in a table
+    private let groupsPerTable: UInt64
+    private let tables: [UInt64]     // file chunk of each table, 0 for none
+    private var tableCache: [UInt64: [UInt8]] = [:]
+    private static let indexMask: UInt64 = 0x007f_ffff_ffff_ffff
+
+    init?(file: ByteSource) {
+        guard let h = file.read(0, 0x50), h.be32(0) == 0x73686477, h.be32(4) == 1 else { return nil } // "shdw", version 1
+        let sectors = h.be64(0x30), maxSectors = h.be64(0x38)
+        let chunk = UInt64(h.be32(0x40)), block = UInt64(h.be16(0x44))
+        guard block >= 512, block % 512 == 0, block <= 65536, chunk >= block, chunk % block == 0, chunk <= 64 << 20,
+              sectors > 0, maxSectors >= sectors else { return nil }
+        let n = 4 * block, s = 8 * (n + 1)
+        let c = chunk / s
+        guard c > 0 else { return nil }
+        let perTable = c * n * chunk
+        let (maxBytes, overflow) = maxSectors.multipliedReportingOverflow(by: block)
+        guard !overflow else { return nil }
+        let t = (maxBytes + perTable - 1) / perTable
+        guard t > 0, t <= 1 << 16 else { return nil }
+
+        // Two directories; the one with the higher sequence number is current.
+        var best: (seq: UInt64, entries: [UInt8])?
+        for at in [h.be64(0x10), h.be64(0x18)] where at > 0 {
+            guard let d = file.read(at, Int(8 * (t + 1))) else { continue }
+            if best == nil || d.be64(0) > best!.seq { best = (d.be64(0), d) }
+        }
+        guard let dir = best else { return nil }
+        self.file = file
+        self.size = sectors * block
+        self.chunk = chunk; self.block = block
+        perGroup = n; groupBytes = s; groupsPerTable = c
+        tables = (0..<Int(t)).map { dir.entries.be64(8 + $0 * 8) & Self.indexMask }
+    }
+
+    func read(_ offset: UInt64, _ length: Int) -> [UInt8]? {
+        guard length > 0, length <= 64 << 20, offset <= size, UInt64(length) <= size - offset else { return nil }
+        var out: [UInt8] = []
+        out.reserveCapacity(length)
+        var pos = offset
+        let end = offset + UInt64(length)
+        while pos < end {
+            let inChunk = pos % chunk
+            let n = Int(min(end - pos, chunk - inChunk))
+            guard let part = readInChunk(pos / chunk, inChunk, n) else { return nil }
+            out += part
+            pos += UInt64(n)
+        }
+        return out
+    }
+
+    /// `n` bytes from disk chunk `index`, starting `at` bytes into it.
+    private func readInChunk(_ index: UInt64, _ at: UInt64, _ n: Int) -> [UInt8]? {
+        let perTable = groupsPerTable * perGroup
+        let tableIndex = index / perTable
+        guard tableIndex < UInt64(tables.count) else { return nil }
+        let tableChunk = tables[Int(tableIndex)]
+        if tableChunk == 0 { return [UInt8](repeating: 0, count: n) }
+        if tableCache[tableChunk] == nil {
+            guard let t = file.read(tableChunk &* chunk, Int(groupsPerTable * groupBytes)) else { return nil }
+            if tableCache.count >= 8 { tableCache.removeAll() }
+            tableCache[tableChunk] = t
+        }
+        let table = tableCache[tableChunk]!
+        let group = (index % perTable) / perGroup, inGroup = index % perGroup
+        let groupAt = Int(group * groupBytes)
+        let entry = table.be64(groupAt + Int(inGroup) * 8)
+        let physical = entry & Self.indexMask
+        switch entry >> 62 {
+        case 0b00, 0b10: // never written, or discarded
+            guard physical == 0 else { return nil }
+            return [UInt8](repeating: 0, count: n)
+        case 0b01:
+            guard physical != 0 else { return nil }
+            return readData(physical, at, n)
+        default: // partly written: the chunk-group's bitmap says which sectors hold data
+            let bitmapChunk = table.be64(groupAt + Int(perGroup) * 8) & Self.indexMask
+            guard physical != 0, bitmapChunk != 0, at % block == 0, UInt64(n) % block == 0 else { return nil }
+            let firstSector = (inGroup * chunk + at) / block, count = UInt64(n) / block
+            let bytesFrom = firstSector / 4, bytesTo = (firstSector + count + 3) / 4
+            guard let bits = file.read(bitmapChunk &* chunk + bytesFrom, Int(bytesTo - bytesFrom)) else { return nil }
+            var out = [UInt8](repeating: 0, count: n)
+            var data: [UInt8]?
+            for i in 0..<count {
+                let sector = firstSector + i
+                let state = (bits[Int(sector / 4 - bytesFrom)] >> ((sector % 4) * 2)) & 3
+                if state == 3 { return nil }
+                guard state == 1 else { continue }
+                if data == nil { data = readData(physical, at, n) }
+                guard let d = data else { return nil }
+                let from = Int(i * block)
+                out.replaceSubrange(from..<(from + Int(block)), with: d[from..<(from + Int(block))])
+            }
+            return out
+        }
+    }
+
+    /// Data at the end of a truncated final chunk reads as zeros rather than failing.
+    private func readData(_ physical: UInt64, _ at: UInt64, _ n: Int) -> [UInt8]? {
+        let start = physical &* chunk + at
+        if let d = file.read(start, n) { return d }
+        guard start < file.size else { return nil }
+        guard var d = file.read(start, Int(file.size - start)) else { return nil }
+        d += [UInt8](repeating: 0, count: n - d.count)
+        return d
     }
 }
 
