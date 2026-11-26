@@ -11,7 +11,7 @@ APP="${OUT_DIR:-build}/UTMWatch.app"
 # BUNDLE_ID and APP_NAME are for test copies only (one with its own privacy permissions beside the real app).
 BUNDLE_ID="${BUNDLE_ID:-com.darrick.utmwatch}"
 APP_NAME="${APP_NAME:-UTM Watch}"
-VERSION="${VERSION:-0.9.6}"
+VERSION="${VERSION:-0.9.7}"
 # The build number tells apart builds that share a version, such as successive betas: the number of commits.
 BUILD="${BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 # BETA=6 marks the build as beta 6 of VERSION. The updater reads it to tell betas of one version apart, and a beta

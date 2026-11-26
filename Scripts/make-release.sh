@@ -13,7 +13,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-0.9.6}"
+VERSION="${1:-0.9.7}"
 BETA=""
 case "$VERSION" in
   *-beta.*) BETA="${VERSION##*-beta.}"; VERSION="${VERSION%%-beta.*}"
