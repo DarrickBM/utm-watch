@@ -360,7 +360,11 @@ func callTool(_ name: String, _ args: [String: Any]) throws -> Any {
             if let s = h.snapshot {
                 d["memoryPressure"] = s.host.pressure.rawValue
                 d["allocatableMemoryGB"] = r3(Double(s.host.allocatable) / gib)
-                d["vms"] = s.rows.filter { $0.pid != nil }.map { ["name": $0.name, "cpuCores": r3($0.cpuCores ?? 0), "memoryGB": r3(Double($0.memoryBytes ?? 0) / gib)] as [String: Any] }
+                if let m = s.rows.first(where: \.isWholeMac) {
+                    d["wholeMac"] = ["cpuCores": r3(m.cpuCores ?? 0), "cores": m.cpuAllocated ?? 0, "memoryUsedGB": r3(Double(m.memoryBytes ?? 0) / gib),
+                                     "memoryGB": r3(Double(m.memoryAllocatedBytes ?? 0) / gib)] as [String: Any]
+                }
+                d["vms"] = s.rows.filter { $0.pid != nil && !$0.isWholeMac }.map { ["name": $0.name, "cpuCores": r3($0.cpuCores ?? 0), "memoryGB": r3(Double($0.memoryBytes ?? 0) / gib)] as [String: Any] }
             }
             return d
         }, "note": "State is as of each Mac's last upload. Pass a Mac's name as \"mac\" to the other tools to look into it."]
@@ -555,7 +559,7 @@ while let line = readLine(strippingNewline: true) {
             "protocolVersion": (params["protocolVersion"] as? String) ?? "2025-06-18",
             "capabilities": ["tools": [String: Any]()],
             "serverInfo": ["name": "utm-watch", "version": serverVersion],
-            "instructions": "Read-only access to UTM Watch's recorded history on this Mac: per-VM CPU, memory, network, disk and ping, host memory and CPU, network link quality, and timeline events. When someone reports slowness without a time, call find_incidents first, then get_moment or summarize on what it returns."
+            "instructions": "Read-only access to UTM Watch's recorded history on this Mac: per-VM CPU, memory, network, disk and ping, host memory and CPU, network link quality, and timeline events. Among the VMs, \"Whole Mac\" (key \"machine\") is the Mac itself as one machine: all its processes against all its cores and RAM, its own disk, and traffic on its own Ethernet and Wi-Fi ports. When someone reports slowness without a time, call find_incidents first, then get_moment or summarize on what it returns."
                 + (fleet == nil ? "" : " This Mac can also read its fleet: list_macs shows every Mac, and each tool takes \"mac\" to look at another one."),
         ])
     case "ping":

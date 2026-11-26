@@ -19,10 +19,27 @@ final class AppModel: ObservableObject {
         alerts = AlertCenter(settings: settings)
         alerts.onEvents = { [weak self] events in self?.record(events) }
         // @Published fires before the value changes; hop to the next main-loop turn to read the new one.
-        otherVMsSetting = settings.$showOtherVMs.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
-            guard let self, let full = self.fullSnapshot else { return }
-            self.snapshot = self.shown(full)
-        }
+        otherVMsSetting = settings.$showOtherVMs.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in self?.reshow() }
+        macUsageSetting = settings.$macUsage.dropFirst().merge(with: settings.$fleetMacUsage.dropFirst().map { _ in "" })
+            .receive(on: RunLoop.main).sink { [weak self] _ in self?.reshow() }
+    }
+
+    /// Whether the Mac's own usage is shown, given whether the Mac has VMs. This Mac's setting by default; the fleet
+    /// window's copy of the model asks about the Mac it shows instead.
+    lazy var macUsageVisible: (_ hasVMs: Bool) -> Bool = { [unowned self] in self.settings.showsMacUsage(hasVMs: $0) }
+    private var macUsageSetting: AnyCancellable?
+
+    /// Whether the Mac shown reports its own usage (older versions do not), and whether it has VMs.
+    var reportsMacUsage: Bool { fullSnapshot?.rows.contains(where: \.isWholeMac) ?? false }
+    var hasVMs: Bool { MacUsage.hasVMs(fullSnapshot?.rows ?? []) }
+
+    /// Applies a changed display choice to the latest sample.
+    func reshow() { if let full = fullSnapshot { snapshot = shown(full) } }
+
+    /// The fleet window's copy: another Mac's latest sample, as the hub has it.
+    func showRemote(_ snap: Snapshot?) {
+        fullSnapshot = snap
+        snapshot = snap.map(shown)
     }
 
     /// The latest sample with every VM in it. `snapshot` is what the views show, which leaves out
@@ -30,10 +47,10 @@ final class AppModel: ObservableObject {
     private var fullSnapshot: Snapshot?
     private var otherVMsSetting: AnyCancellable?
 
-    private func shown(_ snap: Snapshot) -> Snapshot {
-        guard !settings.showOtherVMs else { return snap }
+    func shown(_ snap: Snapshot) -> Snapshot {
         var s = snap
-        s.rows.removeAll { OtherVMs.isOther(key: $0.id) }
+        if !settings.showOtherVMs { s.rows.removeAll { OtherVMs.isOther(key: $0.id) } }
+        if !macUsageVisible(MacUsage.hasVMs(snap.rows)) { s.rows.removeAll(where: \.isWholeMac) }
         return s
     }
 
@@ -166,7 +183,7 @@ final class AppModel: ObservableObject {
         guard settings.captureProcesses else { record(events); return }
         // VM processes all share one system name; label them with the VM's own name instead.
         var vmNames: [Int32: String] = [:]
-        for row in fullSnapshot?.rows ?? [] { if let pid = row.pid { vmNames[pid] = "VM: \(row.name)" } }
+        for row in fullSnapshot?.rows ?? [] where !row.isWholeMac { if let pid = row.pid { vmNames[pid] = "VM: \(row.name)" } }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let top = ProcessTop.capture()
             func name(_ p: TopProcess) -> String { vmNames[p.pid] ?? p.name }
@@ -250,6 +267,26 @@ enum OtherVMs {
         h.series = h.series.filter { !isOther(key: $0.key) }
         h.configs = h.configs.filter { !isOther(key: $0.key) }
         h.events.removeAll { $0.vmKey.map(isOther) ?? false }
+        return h
+    }
+}
+
+/// Mac usage: the Mac itself as one machine, reported by every Mac as the `WholeMac` row. It is always recorded; each
+/// view decides whether to show it. By default a Mac with VMs hides it, and a Mac without any shows it.
+enum MacUsage {
+    /// `choice` is true or false when the viewer picked one, nil for automatic.
+    static func visible(_ choice: Bool?, hasVMs: Bool) -> Bool { choice ?? !hasVMs }
+
+    static func hasVMs(_ rows: [VMRow]) -> Bool { rows.contains { !$0.isWholeMac } }
+    static func hasVMs(_ history: History) -> Bool { history.vms.contains { $0.key != WholeMac.key } }
+
+    /// The same history without the Mac's own line.
+    static func hidden(in history: History) -> History {
+        var h = history
+        h.vms.removeAll { $0.key == WholeMac.key }
+        h.series[WholeMac.key] = nil
+        h.configs = h.configs.filter { $0.key != WholeMac.key }
+        h.events.removeAll { $0.vmKey == WholeMac.key }
         return h
     }
 }

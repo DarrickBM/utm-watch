@@ -63,6 +63,9 @@ public struct VMRow: Codable, Equatable {
     /// True when `diskUsedBytes` is the guest filesystem's own count; false when it is the room the image takes on the Mac.
     public var diskExact: Bool? = nil
 
+    /// The Mac itself, as one machine (see `WholeMac`).
+    public var isWholeMac: Bool { id == WholeMac.key }
+
     /// Share of the disk in use, 0...1.
     public var diskFraction: Double? {
         guard let used = diskUsedBytes, let size = diskSizeBytes, size > 0 else { return nil }
@@ -78,6 +81,15 @@ public struct VMRow: Codable, Equatable {
         self.memoryBytes = memoryBytes; self.memoryAllocatedBytes = memoryAllocatedBytes; self.interface = interface
         self.downRate = downRate; self.upRate = upRate; self.downTotal = downTotal; self.upTotal = upTotal
     }
+}
+
+/// The Mac itself, as one machine: every Mac reports it as a row with this key beside its VMs. Its CPU limit is the Mac's
+/// cores, its memory limit the Mac's RAM, its disk the Mac's own disk and its network the Mac's physical ports, so the
+/// history, the hub and the alerts treat it like a VM that is always running. Whether it is shown is the viewer's choice
+/// ("Mac usage"): by default only for a Mac without VMs.
+public enum WholeMac {
+    public static let key = "machine"
+    public static let name = "Whole Mac"
 }
 
 public struct HostSummary: Codable, Equatable {

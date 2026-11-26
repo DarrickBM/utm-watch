@@ -51,12 +51,16 @@ final class DetailModel: ObservableObject {
         self.settings = settings
         cancellable = model.$snapshot.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh(force: false) }
         otherVMsSetting = settings.$showOtherVMs.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh(force: true) }
+        macUsageSetting = settings.$macUsage.dropFirst().merge(with: settings.$fleetMacUsage.dropFirst().map { _ in "" })
+            .receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh(force: true) }
     }
 
     private var otherVMsSetting: AnyCancellable?
+    private var macUsageSetting: AnyCancellable?
 
     private func shown(_ h: History) -> History {
-        settings.showOtherVMs ? h : OtherVMs.hidden(in: h)
+        let h2 = settings.showOtherVMs ? h : OtherVMs.hidden(in: h)
+        return model.macUsageVisible(MacUsage.hasVMs(h)) ? h2 : MacUsage.hidden(in: h2)
     }
 
     var isLive: Bool { end == nil }

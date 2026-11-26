@@ -529,7 +529,8 @@ final class FleetController: ObservableObject {
         remoteDetail.isActive = false
         remoteDetail.reset()
         guard let uuid, let host = hosts.first(where: { $0.uuid == uuid }) else { remoteDetail.remoteLoad = nil; return }
-        mirror.snapshot = host.snapshot; mirror.link = host.link
+        mirror.macUsageVisible = { [weak self] hasVMs in self?.settings.showsMacUsage(host: uuid, hasVMs: hasVMs) ?? false }
+        mirror.showRemote(host.snapshot); mirror.link = host.link
         remoteDetail.remoteLoad = { [weak self] from, to, maxPoints, done in
             guard let self, let id = self.identity, let token = id.readerToken, let client = self.client(for: id) else { done(nil); return }
             self.work.async {
@@ -556,7 +557,7 @@ final class FleetController: ObservableObject {
                     self.hosts = list; self.hostsError = nil; self.loadedOnce = true; self.updatedAt = Date()
                     if let uuid = self.selected {
                         if let host = list.first(where: { $0.uuid == uuid }) {
-                            self.mirror.snapshot = host.snapshot; self.mirror.link = host.link
+                            self.mirror.showRemote(host.snapshot); self.mirror.link = host.link
                             self.remoteDetail.refresh(force: false)
                         } else { self.select(nil) }
                     }

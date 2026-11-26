@@ -46,6 +46,7 @@ UTM shows whether a VM is on or off. Activity Monitor shows two processes with t
 
 - **Recorded history** you can scrub back through, to see exactly what was happening at a past moment.
 - **The whole connection path**: ping to each VM, to your router and to the internet, plus Wi-Fi or Ethernet link quality, so you can tell a slow VM from a slow network.
+- **Mac usage**: the Mac itself as one machine (all its CPU, memory, disk and network) beside its VMs. Shown by default for a Mac without VMs, such as one used directly, and a click away for a VM host.
 - **Fleets**: several Macs report to one hub, and one window shows every Mac and its VMs. Free, with no accounts.
 - **Alerts** for risks (a disk filling up, memory short) and issues (a VM stopped, the network down), with rules you change in plain sentences, on the Mac and pushed to your iPhone. See [Alerts](#alerts).
 - **An AI agent built in**, optional and on your own model: it writes a rule from a sentence, looks into each issue and says the likely cause, and tunes rules that alert too often. See [AI built in](#ai-built-in).

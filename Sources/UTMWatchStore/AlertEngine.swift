@@ -269,13 +269,18 @@ public struct AlertEngine {
                     guard let used = avg[vm.key]?.cpu, let cores = vm.cores, cores > 0, let limit = rule.value else { continue }
                     let share = used / Double(cores)
                     step(rule, vm.key, vm.key, s.t, bad: share >= limit / 100, hold: hold, clear: hold, out: &out) { _ in
-                        ("\(vm.name) at its CPU limit",
-                         "Using \(String(format: "%.1f", used)) of its \(cores) cores (\(Int((share * 100).rounded()))%). Work inside it is waiting for processor time.",
-                         "Find what is busy inside the VM, or give it more cores in UTM if this is its normal load.")
+                        vm.key == WholeMac.key
+                            ? ("This Mac at its CPU limit",
+                               "Using \(String(format: "%.1f", used)) of its \(cores) cores (\(Int((share * 100).rounded()))%). Work on it is waiting for processor time.",
+                               "Find what is busy on the Mac.")
+                            : ("\(vm.name) at its CPU limit",
+                               "Using \(String(format: "%.1f", used)) of its \(cores) cores (\(Int((share * 100).rounded()))%). Work inside it is waiting for processor time.",
+                               "Find what is busy inside the VM, or give it more cores in UTM if this is its normal load.")
                     }
                 }
             case .vmDisk, .vmDiskFull:
-                for vm in s.vms where !rule.excluded.contains(vm.key) {
+                // A Mac rented out whole: its disk is this Mac's disk, which the Mac disk rules already watch.
+                for vm in s.vms where !rule.excluded.contains(vm.key) && vm.key != WholeMac.key {
                     guard let used = vm.diskUsed, let size = vm.diskSize, size > 0, let limit = rule.value else { continue }
                     let share = min(1, used / size)
                     let pair = "\(AlertEngine.gb(used)) of \(AlertEngine.gb(size)) GB used"

@@ -13,7 +13,7 @@ struct FleetWindowView: View {
     var body: some View {
         if let uuid = fleet.selected, let host = fleet.hosts.first(where: { $0.uuid == uuid }) {
             DetailView(model: fleet.mirror, settings: settings, detail: fleet.remoteDetail, onSettings: onSettings,
-                       remote: .init(name: host.name, state: host.state, onBack: { fleet.select(nil) }))
+                       remote: .init(uuid: host.uuid, name: host.name, state: host.state, onBack: { fleet.select(nil) }))
         } else {
             FleetOverview(fleet: fleet, settings: settings, onSettings: onSettings)
         }
@@ -36,20 +36,28 @@ struct FleetOverview: View {
     }
 
     private func rows(_ host: HostStatus) -> [VMRow] {
-        (host.snapshot?.rows ?? []).filter { settings.showOtherVMs || !OtherVMs.isOther(key: $0.id) }
+        (host.snapshot?.rows ?? []).filter { !$0.isWholeMac && (settings.showOtherVMs || !OtherVMs.isOther(key: $0.id)) }
     }
+
+    /// The Mac's own usage, as one machine. Nil from a Mac on a version that does not report it.
+    private func wholeMac(_ host: HostStatus) -> VMRow? { host.snapshot?.rows.first(where: \.isWholeMac) }
+    private func hasVMs(_ host: HostStatus) -> Bool { MacUsage.hasVMs(host.snapshot?.rows ?? []) }
+    /// Whether this window shows that Mac's own usage: the viewer's choice for it, else only for a Mac without VMs.
+    private func showsUsage(_ host: HostStatus) -> Bool { settings.showsMacUsage(host: host.uuid, hasVMs: hasVMs(host)) }
+    private func shownUsage(_ host: HostStatus) -> VMRow? { showsUsage(host) ? wholeMac(host) : nil }
 
     private func needsAttention(_ host: HostStatus) -> Bool {
         if host.state != "online" { return true }
         if let skew = host.skewMs, abs(skew) > 5000 { return true }
         guard let snap = host.snapshot else { return false }
+        if let m = shownUsage(host), Explain.cpu(m) != nil || Explain.disk(m) != nil { return true }
         return Explain.pressure(snap.host) != nil || Explain.swap(snap.host) != nil || rows(host).contains { Explain.cpu($0) != nil }
     }
 
     private var shown: [HostStatus] { attentionOnly ? fleet.hosts.filter(needsAttention) : fleet.hosts }
 
     private struct Line {
-        enum Kind { case mac(HostStatus), vm(VMRow), collapsed(HostStatus) }
+        enum Kind { case mac(HostStatus), usage(VMRow), vm(VMRow), note(String), collapsed(HostStatus) }
         var id: String
         var kind: Kind
     }
@@ -59,6 +67,10 @@ struct FleetOverview: View {
         for host in shown {
             out.append(Line(id: host.uuid, kind: .mac(host)))
             if host.state == "online" {
+                if let m = shownUsage(host) { out.append(Line(id: host.uuid + "|" + m.id, kind: .usage(m))) }
+                if !hasVMs(host), host.snapshot != nil, shownUsage(host) == nil {
+                    out.append(Line(id: host.uuid + "|note", kind: .note(wholeMac(host) == nil ? "No VMs." : "No VMs · Mac usage hidden")))
+                }
                 for row in rows(host) { out.append(Line(id: host.uuid + "|" + row.id, kind: .vm(row))) }
             } else {
                 out.append(Line(id: host.uuid + "|collapsed", kind: .collapsed(host)))
@@ -90,7 +102,9 @@ struct FleetOverview: View {
                             ForEach(lines, id: \.id) { line in
                                 switch line.kind {
                                 case .mac(let host): macRow(host)
+                                case .usage(let row): usageRow(row)
                                 case .vm(let row): vmRow(row)
+                                case .note(let text): note(text)
                                 case .collapsed(let host): collapsed(host)
                                 }
                             }
@@ -209,7 +223,12 @@ struct FleetOverview: View {
                 }
                 .frame(width: Col.state, alignment: .leading)
                 Group {
-                    if online, let s = snap {
+                    if online, !hasVMs(host) {
+                        // Nothing to allocate on a Mac without VMs: its figures are in its "Whole Mac" row.
+                        Text("").frame(width: Col.cpu + Col.memory + Col.disk)
+                        Text(linkText(host.link)).foregroundStyle(Explain.link(host.link) == nil ? Color.primary : Color.orange)
+                            .frame(width: Col.network, alignment: .leading)
+                    } else if online, let s = snap {
                         Text(s.host.hostCPUCores.map { "\(String(format: "%.1f", $0)) of \(s.host.physicalCores) cores busy" } ?? "\(s.host.physicalCores) cores")
                             .frame(width: Col.cpu, alignment: .leading)
                         HStack(spacing: 5) {
@@ -239,9 +258,63 @@ struct FleetOverview: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Above the row's own button, in the Disk column, which a Mac's row leaves empty.
+        .overlay(alignment: .trailing) {
+            if online, wholeMac(host) != nil {
+                let on = showsUsage(host)
+                Button { settings.fleetMacUsage[host.uuid] = !on } label: {
+                    Label(on ? "Hide Mac usage" : "Show Mac usage", systemImage: on ? "eye.slash" : "eye").font(.system(size: 12))
+                }
+                .controlSize(.small).fixedSize()
+                .help(on ? "Hide \(host.name)'s own CPU, memory, disk and network" : "Show \(host.name)'s own CPU, memory, disk and network, as one machine")
+                .frame(width: Col.disk, alignment: .leading)
+                .padding(.trailing, 20 + Col.tail + Col.network)
+            }
+        }
         .padding(.top, 6)
         .help("Show \(host.name)'s history")
         .accessibilityLabel("\(host.name), \(stateText(host))")
+    }
+
+    /// The Mac itself, as one machine: like a VM row, against the Mac's own cores, RAM and disk, in a neutral ink.
+    private func usageRow(_ m: VMRow) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "desktopcomputer").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(WholeMac.name).fontWeight(.semibold).lineLimit(1)
+            }
+            .padding(.leading, 24).frame(maxWidth: .infinity, alignment: .leading)
+            Text("All of the Mac").foregroundStyle(.secondary).frame(width: Col.state, alignment: .leading)
+            FleetMeter(text: Format.cores(m.cpuCores, m.cpuAllocated), fraction: Self.fraction(m.cpuCores, m.cpuAllocated.map(Double.init)),
+                       warning: Explain.cpu(m), tint: .primary.opacity(0.65))
+                .frame(width: Col.cpu - 20, alignment: .leading).padding(.trailing, 20)
+            FleetMeter(text: "\(Format.memoryPair(m.memoryBytes, m.memoryAllocatedBytes)) in use",
+                       fraction: Self.fraction(m.memoryBytes.map(Double.init), m.memoryAllocatedBytes.map(Double.init)), warning: nil, tint: .primary.opacity(0.65))
+                .frame(width: Col.memory - 20, alignment: .leading).padding(.trailing, 20)
+            if let used = m.diskUsedBytes, let size = m.diskSizeBytes {
+                FleetMeter(text: Format.memoryPair(used, size), fraction: m.diskFraction, warning: Explain.disk(m), tint: .primary.opacity(0.65))
+                    .frame(width: Col.disk - 20, alignment: .leading).padding(.trailing, 20)
+            } else {
+                Text("").frame(width: Col.disk)
+            }
+            Text("↓ \(Format.rate(m.downRate, units: settings.rateUnits))   ↑ \(Format.rate(m.upRate, units: settings.rateUnits))")
+                .monospacedDigit().lineLimit(1).frame(width: Col.network, alignment: .leading)
+            Text("").frame(width: Col.tail)
+        }
+        .font(.system(size: 13))
+        .padding(.horizontal, 20).frame(height: 30)
+        .overlay(alignment: .bottom) { Divider().padding(.leading, 46) }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text).font(.system(size: 13)).foregroundStyle(.secondary)
+            .padding(.leading, 46).padding(.trailing, 20).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+    }
+
+    private static func fraction(_ used: Double?, _ of: Double?) -> Double? {
+        guard let used, let of, of > 0 else { return nil }
+        return min(1, max(0, used / of))
     }
 
     private func vmRow(_ row: VMRow) -> some View {
@@ -294,7 +367,7 @@ struct FleetOverview: View {
         let all = rows(host), running = all.filter { $0.pid != nil }.count
         let text: String
         if host.snapshot == nil { text = "This Mac has joined but has not reported yet." }
-        else if all.isEmpty { text = "No VMs." }
+        else if all.isEmpty { text = "No VMs · " + (host.state == "asleep" ? "went to sleep" : "stopped reporting") + (host.lastSeen.map { " \(FleetOverview.span(Date().msSince1970 - $0)) ago" } ?? "") }
         else {
             let verb = host.state == "asleep" ? "went to sleep" : "stopped reporting"
             text = "\(all.count) VM\(all.count == 1 ? "" : "s") · \(running) \(running == 1 ? "was" : "were") running when this Mac \(verb)"
@@ -360,6 +433,7 @@ private struct FleetMeter: View {
     let fraction: Double?
     var back: Double? = nil
     let warning: String?
+    var tint: Color = .accentColor
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -370,8 +444,8 @@ private struct FleetMeter: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.10))
-                    if let back { Capsule().fill(Color.accentColor.opacity(0.3)).frame(width: geo.size.width * back) }
-                    Capsule().fill(warning == nil ? Color.accentColor : Color.orange).frame(width: geo.size.width * (fraction ?? 0))
+                    if let back { Capsule().fill(tint.opacity(0.3)).frame(width: geo.size.width * back) }
+                    Capsule().fill(warning == nil ? tint : Color.orange).frame(width: geo.size.width * (fraction ?? 0))
                 }
             }
             .frame(height: 4)

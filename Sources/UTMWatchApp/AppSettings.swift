@@ -34,6 +34,16 @@ final class AppSettings: ObservableObject {
     /// Fleet: this Mac runs the hub the other Macs report to.
     @Published var hostHub: Bool { didSet { defaults.set(hostHub, forKey: "hostHub") } }
     @Published var hubPort: Int { didSet { defaults.set(hubPort, forKey: "hubPort") } }
+    /// Mac usage, the Mac itself as one machine (`WholeMac`), in this Mac's own views: "auto" (shown while it has no VMs),
+    /// "show" or "hide". It is recorded and reported either way.
+    @Published var macUsage: String { didSet { defaults.set(macUsage, forKey: "macUsage") } }
+    /// The same choice for each Mac of the fleet, by host UUID, as this Mac shows them; a Mac without an entry is "auto".
+    @Published var fleetMacUsage: [String: Bool] { didSet { defaults.set(fleetMacUsage, forKey: "fleetMacUsage") } }
+
+    /// Whether this Mac's own usage is shown, given whether it has VMs.
+    func showsMacUsage(hasVMs: Bool) -> Bool { MacUsage.visible(macUsage == "show" ? true : macUsage == "hide" ? false : nil, hasVMs: hasVMs) }
+    /// Whether another Mac's usage is shown in the fleet window, given whether it has VMs.
+    func showsMacUsage(host uuid: String, hasVMs: Bool) -> Bool { MacUsage.visible(fleetMacUsage[uuid], hasVMs: hasVMs) }
     /// Fleet: stay in the fleet but stop sending this Mac's VMs for now.
     @Published var fleetReportingPaused: Bool { didSet { defaults.set(fleetReportingPaused, forKey: "fleetReportingPaused") } }
     /// Fleet: show a notification when another Mac has trouble or stops reporting.
@@ -89,6 +99,9 @@ final class AppSettings: ObservableObject {
         hostHub = defaults.bool(forKey: "hostHub")
         let port = defaults.integer(forKey: "hubPort")
         hubPort = (1024...65535).contains(port) ? port : 8787
+        let usage = defaults.string(forKey: "macUsage") ?? "auto"
+        macUsage = ["auto", "show", "hide"].contains(usage) ? usage : "auto"
+        fleetMacUsage = defaults.dictionary(forKey: "fleetMacUsage") as? [String: Bool] ?? [:]
         fleetReportingPaused = defaults.bool(forKey: "fleetReportingPaused")
         fleetAlerts = defaults.bool(forKey: "fleetAlerts")
         notifyIssues = defaults.bool(forKey: "notifyIssues")

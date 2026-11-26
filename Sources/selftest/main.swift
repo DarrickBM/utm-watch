@@ -1028,5 +1028,34 @@ do {
     try? FileManager.default.removeItem(atPath: dir)
 }
 
+// MARK: Mac usage: the Mac itself as one machine
+do {
+    check(MonitorEngine.isPhysicalInterface("en0") && MonitorEngine.isPhysicalInterface("en12"), "en0 and en12 are the Mac's own ports")
+    check(!["en", "bridge0", "vmenet3", "utun2", "lo0", "enx"].contains(where: MonitorEngine.isPhysicalInterface), "bridges, VM interfaces, tunnels and loopback are not")
+
+    var options = MonitorEngine.Options()
+    options.useUTMScripting = false
+    options.utmDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("utmwatch-no-vms-\(getpid())")
+    let engine = MonitorEngine(options: options)
+    _ = engine.tick(interval: 2)
+    Thread.sleep(forTimeInterval: 0.3)   // CPU ticks advance in steps; give them time to move
+    let snap = engine.tick(interval: 2)
+    let m = snap.rows.last
+    check(snap.rows.filter(\.isWholeMac).count == 1 && m?.isWholeMac == true && m?.pid != nil && m?.status == .running, "every Mac reports itself once, last, always running")
+    check(m?.cpuAllocated == snap.host.physicalCores && m?.memoryAllocatedBytes == snap.host.totalMemory, "its limits are the Mac's own cores and RAM")
+    check(m?.diskSizeBytes == snap.host.diskTotalBytes && m?.cpuCores != nil, "its disk is the Mac's disk, and its CPU is measured")
+    let vmCores = snap.rows.filter { $0.pid != nil && !$0.isWholeMac }.reduce(0) { $0 + ($1.cpuAllocated ?? 0) }
+    check(snap.host.allocatedCores == vmCores && !engine.networkTargets().contains { $0.key == WholeMac.key }, "it is not counted as a VM, and is not pinged")
+
+    let gb = 1_073_741_824.0, t0: Int64 = 1_700_000_000_000
+    let whole = AlertSample.VM(key: WholeMac.key, name: WholeMac.name, running: true, cpu: 13.8, cores: 14, diskUsed: 990 * gb, diskSize: 1000 * gb)
+    var e = AlertEngine(rules: [AlertRule(kind: .cpu, level: .risk, value: 90, minutes: 1), AlertKind.vmDisk.spec.rule, AlertKind.vmDiskFull.spec.rule])
+    var opened: [Alert] = []
+    for i in 0..<120 { for c in e.ingest(AlertSample(t: t0 + Int64(i) * 2000, vms: [whole], pressure: 0)) { if case .opened(let a) = c { opened.append(a) } } }
+    check(opened.count == 1 && opened.first?.title == "This Mac at its CPU limit" && opened.first?.todo.contains("UTM") == false,
+          "a busy Mac is named as this Mac, with nothing about UTM")
+    check(!opened.contains { $0.rule.hasPrefix("vm_disk") }, "its disk is left to the Mac disk rules, not alerted twice as a VM's")
+}
+
 print("\(checks - failures)/\(checks) checks passed")
 exit(failures == 0 ? 0 : 1)

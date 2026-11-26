@@ -132,6 +132,9 @@ struct TracksView: View {
         var threshold: (value: Double, label: String)? = nil
         /// What the track shows, in plain words; appears when hovering its label.
         var explanation: String = ""
+        /// The Mac's own line, where it is read differently from a VM's (its memory in use, not a process in RAM).
+        var machineValue: ((VMPoint) -> Double?)? = nil
+        var machineText: ((VMPoint, VMConfig?) -> String)? = nil
     }
 
     private struct LegendItem {
@@ -146,7 +149,17 @@ struct TracksView: View {
 
     private var span: Double { Double(max(1, history.to - history.from)) }
     private func fraction(_ t: Int64) -> CGFloat { CGFloat(Double(t - history.from) / span) }
-    private func color(_ key: String) -> Color { SeriesPalette.color(index: order.firstIndex(of: key) ?? 0, scheme: scheme) }
+    /// The Mac's own line is a neutral ink, so the VMs read as parts of it; the VMs keep the palette.
+    private func color(_ key: String) -> Color {
+        key == WholeMac.key ? Color.primary.opacity(0.72) : SeriesPalette.color(index: order.firstIndex(of: key) ?? 0, scheme: scheme)
+    }
+    private var hasVMs: Bool { MacUsage.hasVMs(history) }
+    /// The lines one track draws. The Mac's own disk is far larger than any VM's, so beside VMs it stays off the Disk track.
+    /// The Mac comes first: listed above its VMs, and drawn beneath them.
+    private func drawn(_ spec: Spec) -> [VMInfo] {
+        let mac = shownVMs.filter { $0.key == WholeMac.key }, vms = shownVMs.filter { $0.key != WholeMac.key }
+        return spec.title == "Disk" && hasVMs ? vms : mac + vms
+    }
     private var readoutT: Int64 { readout ?? history.to }
 
     private var specs: [Spec] {
@@ -164,6 +177,7 @@ struct TracksView: View {
                  text: { p, cfg in Format.cores(p.cpu, cfg?.cores) },
                  warning: { p, cfg, name in
                      guard let used = p.cpu, let limit = cfg?.cores, limit > 0, used >= 0.9 * Double(limit) else { return nil }
+                     if name == WholeMac.name { return "This Mac is using \(String(format: "%.1f", used)) of its \(limit) cores: every core is busy, so work on it is waiting for processor time." }
                      return "\(name) is using \(String(format: "%.1f", used)) of its \(limit) cores: at its CPU limit, so work inside it is waiting for processor time."
                  },
                  explanation: "Cores each VM is keeping busy, then the number it is allowed to use.\n\nHow it is measured: every sample, the CPU time the VM's process has used (user plus system) is compared with the previous sample and divided by the real time between them. 1.0 means one core fully busy. The limit is the CPU count in the VM's UTM configuration. Over long time frames each point is the average of its interval and the faint line is the peak."),
@@ -179,7 +193,9 @@ struct TracksView: View {
                      return "\(String(format: "%.1f", inRAM / 1_073_741_824)) / \(held)"
                  },
                  secondary: { $0.mem },
-                 explanation: "Solid line: how much of the VM's memory is in this Mac's RAM right now. Dashed line: how much the VM holds in total.\n\nHow it is measured: \"held\" is the physical footprint of the VM's process, including pages macOS has compressed or moved to swap; it matches Activity Monitor's Memory column. \"In RAM\" is the process's resident size, which leaves those pages out. Once a guest has touched all its memory the dashed line is usually flat. The gap between the two lines is memory the VM must wait for when it needs it again.\n\nWhy held can be more than the VM's memory size: held covers everything macOS charges to the VM's process, not only the guest's own memory. Memory the Mac uses on the VM's behalf, such as for its display, is counted too, so held can read higher than the memory size set in UTM."),
+                 explanation: "Solid line: how much of the VM's memory is in this Mac's RAM right now. Dashed line: how much the VM holds in total.\n\nHow it is measured: \"held\" is the physical footprint of the VM's process, including pages macOS has compressed or moved to swap; it matches Activity Monitor's Memory column. \"In RAM\" is the process's resident size, which leaves those pages out. Once a guest has touched all its memory the dashed line is usually flat. The gap between the two lines is memory the VM must wait for when it needs it again.\n\nWhy held can be more than the VM's memory size: held covers everything macOS charges to the VM's process, not only the guest's own memory. Memory the Mac uses on the VM's behalf, such as for its display, is counted too, so held can read higher than the memory size set in UTM.",
+                 machineValue: { $0.mem },
+                 machineText: { p, cfg in "\(Format.memoryPair(p.mem.map { UInt64(max(0, $0)) }, cfg?.memBytes.map { UInt64(max(0, $0)) })) in use" }),
             Spec(title: "Disk", unit: "used / volume size", value: { $0.diskFraction.map { $0 * 100 } }, peak: { $0.diskFraction.map { $0 * 100 } }, yMax: 100,
                  label: { "\(Int($0))%" },
                  text: { p, _ in
@@ -269,7 +285,7 @@ struct TracksView: View {
         case .ping:
             probeTrack(index, title: "Responsiveness", unit: "VM ping", height: h, foldsOthers: true,
                        explanation: "How long each VM takes to answer a ping from this Mac.\n\nHow it is measured: every 10 seconds UTM Watch sends one ping (an ICMP echo) to the VM's address on the Mac's internal network and times the reply, waiting up to 1 second. The address comes from the Mac's ARP table, matched by the VM's MAC address. The reply never leaves the Mac, so it normally takes under 1 ms; a higher value means the VM itself was slow to react. A red tick is a ping with no reply. Over long time frames each point is the average and the faint line is the worst.",
-                       series: shownVMs.map { ProbeSeries(key: $0.key, name: $0.name, color: color($0.key), points: history.probes[ProbeTarget.vm($0.key)] ?? []) })
+                       series: shownVMs.filter { $0.key != WholeMac.key }.map { ProbeSeries(key: $0.key, name: $0.name, color: color($0.key), points: history.probes[ProbeTarget.vm($0.key)] ?? []) })
         case .path:
             probeTrack(index, title: "Network path", unit: "from the Mac", height: h,
                        explanation: "How long it takes to reach your router and the internet from this Mac. It separates network trouble from VM trouble: when a remote session lags while Responsiveness stays flat, the cause is on this path.\n\nHow it is measured: every 10 seconds, one ping to the router and one to the internet, each waiting up to 1 second. A red tick is a ping with no reply. Hover Router or Internet to see what each one covers.",
@@ -377,11 +393,12 @@ struct TracksView: View {
     }
 
     private func vmItems(_ spec: Spec) -> [LegendItem] {
-        shownVMs.map { vm in
+        drawn(spec).map { vm in
             let p = Readout.nearest(history.series[vm.key] ?? [], t: readoutT, tolerance: Readout.tolerance(history), time: { $0.t })
             let cfg = history.config(for: vm.key, at: readoutT)
+            let text = vm.key == WholeMac.key ? (spec.machineText ?? spec.text) : spec.text
             return LegendItem(key: vm.key, name: vm.name, color: color(vm.key),
-                              value: p.map { spec.text($0, cfg) } ?? "not running",
+                              value: p.map { text($0, cfg) } ?? "not running",
                               warning: p.flatMap { spec.warning($0, cfg, vm.name) })
         }
     }
@@ -461,8 +478,9 @@ struct TracksView: View {
                 // A line is broken wherever samples are missing (Mac asleep, app not running, VM stopped).
                 let gap = max(history.bucketMs * 3, 10_000)
                 let showPeaks = history.bucketMs > 5000
-                for vm in shownVMs {
+                for vm in drawn(spec) {
                     let points = history.series[vm.key] ?? []
+                    let machine = vm.key == WholeMac.key
                     let c = color(vm.key)
                     func path(_ f: (VMPoint) -> Double?) -> Path {
                         var p = Path()
@@ -476,23 +494,27 @@ struct TracksView: View {
                         return p
                     }
                     let k = strength(vm.key)
-                    if let secondary = spec.secondary {
+                    if machine, spec.machineValue != nil {
+                        // The Mac's memory in use has no "held" line of its own.
+                    } else if let secondary = spec.secondary {
                         ctx.stroke(path(secondary), with: .color(c.opacity(0.6 * k)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round, dash: [5, 4]))
                     } else if showPeaks {
                         ctx.stroke(path(spec.peak), with: .color(c.opacity(0.35 * k)), style: StrokeStyle(lineWidth: 1, lineJoin: .round))
                     }
-                    ctx.stroke(path(spec.value), with: .color(c.opacity(k)), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    ctx.stroke(path(machine ? (spec.machineValue ?? spec.value) : spec.value), with: .color(c.opacity(k)),
+                               style: StrokeStyle(lineWidth: machine ? 2.6 : 2, lineCap: .round, lineJoin: .round))
                 }
 
                 // Dots where the readout moment crosses each line.
                 if readout != nil {
                     var tags: [(at: CGPoint, color: Color, text: String)] = []
-                    for vm in shownVMs where strength(vm.key) == 1 {
+                    for vm in drawn(spec) where strength(vm.key) == 1 {
+                        let machine = vm.key == WholeMac.key
                         guard let p = Readout.nearest(history.series[vm.key] ?? [], t: readoutT, tolerance: Readout.tolerance(history), time: { $0.t }),
-                              let v = spec.value(p) else { continue }
+                              let v = (machine ? (spec.machineValue ?? spec.value) : spec.value)(p) else { continue }
                         let at = CGPoint(x: fraction(p.t) * w, y: y(v))
                         dot(&ctx, at: at, color: color(vm.key))
-                        tags.append((at, color(vm.key), spec.text(p, history.config(for: vm.key, at: readoutT))))
+                        tags.append((at, color(vm.key), (machine ? (spec.machineText ?? spec.text) : spec.text)(p, history.config(for: vm.key, at: readoutT))))
                     }
                     if showsTags { drawTags(&ctx, tags, plotWidth: w, height: size.height) }
                 }

@@ -270,14 +270,7 @@ public final class MonitorEngine {
                                        macOSRunning: macOSRunning)
 
         targets = newTargets
-        var hostCPU: Double?
-        var busy: UInt64 = 0, total: UInt64 = 0
-        if shim_host_cpu_ticks(&busy, &total) == 0 {
-            if let last = lastCPUTicks, total > last.total, busy >= last.busy {
-                hostCPU = Double(busy - last.busy) / Double(total - last.total) * Double(HostStats.physicalCores)
-            }
-            lastCPUTicks = (busy, total)
-        }
+        let hostCPU = readHostCPU()
 
         // 6. Notices.
         var notices: [String] = []
@@ -293,15 +286,58 @@ public final class MonitorEngine {
                                   swapUsed: host.swapUsed, swapTotal: host.swapTotal, physicalCores: host.physicalCores,
                                   allocatedCores: host.allocatedCores, macOSRunning: host.macOSRunning, macOSLimit: options.macOSLimit)
         summary.hostCPUCores = hostCPU
-        // The Mac's own disk: one cheap call, read every ten seconds. Kept apart from the slow sources, which can
-        // wait on a permission prompt; free space must be known even then.
+        readHostDisk(now: now)
+        summary.diskFreeBytes = hostDisk?.free
+        summary.diskTotalBytes = hostDisk?.total
+        // The Mac itself goes last, after the host figures above were worked out from the VMs alone.
+        rows.append(Self.wholeMacRow(host: summary, memoryKnown: mem != nil, counters: counters, rates: rates))
+        return Snapshot(timestamp: Date(), intervalSeconds: interval, rows: rows, host: summary, notices: notices)
+    }
+
+    /// Cores busy across the whole Mac since the last reading; nil on the first.
+    private func readHostCPU() -> Double? {
+        var busy: UInt64 = 0, total: UInt64 = 0
+        guard shim_host_cpu_ticks(&busy, &total) == 0 else { return nil }
+        defer { lastCPUTicks = (busy, total) }
+        guard let last = lastCPUTicks, total > last.total, busy >= last.busy else { return nil }
+        return Double(busy - last.busy) / Double(total - last.total) * Double(HostStats.physicalCores)
+    }
+
+    /// The Mac's own disk: one cheap call, read every ten seconds. Kept apart from the slow sources, which can
+    /// wait on a permission prompt; free space must be known even then.
+    private func readHostDisk(now: UInt64) {
         if hostDisk == nil || Double(now &- hostDiskAt) / 1e9 >= 10 {
             hostDiskAt = now
             if let d = HostStats.disk() { hostDisk = d }
         }
-        summary.diskFreeBytes = hostDisk?.free
-        summary.diskTotalBytes = hostDisk?.total
-        return Snapshot(timestamp: Date(), intervalSeconds: interval, rows: rows, host: summary, notices: notices)
+    }
+
+    /// The Mac as one machine (`WholeMac`): every process on it, against its own cores, RAM and disk, and the traffic on
+    /// its own Ethernet and Wi-Fi ports. Whether it is shown is the viewer's choice; it is always recorded.
+    static func wholeMacRow(host: HostSummary, memoryKnown: Bool, counters: [String: InterfaceCounter], rates: [String: InterfaceRate]) -> VMRow {
+        var row = VMRow(id: WholeMac.key, name: WholeMac.name, backend: .unknown, status: .running, pid: 0, identified: true,
+                        cpuCores: host.hostCPUCores, cpuAllocated: host.physicalCores,
+                        memoryBytes: memoryKnown ? host.hostUsed : nil, memoryAllocatedBytes: host.totalMemory)
+        // Bridges, VM interfaces, tunnels and loopback are left out: VM traffic already crosses a physical port once.
+        let physical = counters.keys.filter(isPhysicalInterface)
+        if !physical.isEmpty {
+            let r = physical.compactMap { rates[$0] }
+            if !r.isEmpty {
+                row.downRate = r.reduce(0) { $0 + $1.ibytesPerSecond }
+                row.upRate = r.reduce(0) { $0 + $1.obytesPerSecond }
+            }
+            row.downTotal = physical.reduce(UInt64(0)) { $0 &+ (counters[$1]?.ibytes ?? 0) }
+            row.upTotal = physical.reduce(UInt64(0)) { $0 &+ (counters[$1]?.obytes ?? 0) }
+        }
+        if let free = host.diskFreeBytes, let total = host.diskTotalBytes, total >= free {
+            row.diskUsedBytes = total - free; row.diskSizeBytes = total; row.diskExact = true
+        }
+        return row
+    }
+
+    /// "en0", "en1", ...: the Mac's own Ethernet and Wi-Fi ports.
+    public static func isPhysicalInterface(_ name: String) -> Bool {
+        name.hasPrefix("en") && name.dropFirst(2).allSatisfy(\.isNumber) && name.count > 2
     }
 
     public static func placeholderBundle(path: String, backend: VMBackend) -> UTMBundle {

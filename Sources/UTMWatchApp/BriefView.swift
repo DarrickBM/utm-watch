@@ -85,13 +85,16 @@ struct BriefView: View {
             if !alerts.open.isEmpty { AlertsAttention(alerts: alerts.open) }
 
             if let snap = model.snapshot {
-                let vms = snap.rows.filter { $0.pid != nil }
-                if vms.isEmpty {
+                // The Mac itself, when shown, heads the list in a neutral ink; the VMs keep their palette colours.
+                let running = snap.rows.filter { $0.pid != nil }
+                let vms = running.filter(\.isWholeMac) + running.filter { !$0.isWholeMac }
+                if !running.contains(where: { !$0.isWholeMac }) {
                     Text("No VM running").foregroundStyle(.secondary)
                 }
                 ForEach(vms, id: \.id) { vm in
                     VMBriefRow(vm: vm, units: settings.rateUnits,
-                               color: SeriesPalette.color(index: model.ring.order.firstIndex(of: vm.id) ?? 0, scheme: scheme),
+                               color: vm.isWholeMac ? Color.primary.opacity(0.65)
+                                   : SeriesPalette.color(index: model.ring.order.filter { $0 != WholeMac.key }.firstIndex(of: vm.id) ?? 0, scheme: scheme),
                                ping: Self.ping(model.ring.probes[ProbeTarget.vm(vm.id)], at: snap.timestamp.msSince1970),
                                explanation: $explanation)
                 }

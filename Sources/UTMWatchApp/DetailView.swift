@@ -16,6 +16,7 @@ struct DetailView: View {
     var remote: RemoteMac? = nil
 
     struct RemoteMac {
+        var uuid: String
         var name: String
         /// "online", "offline" or "asleep".
         var state: String
@@ -23,7 +24,15 @@ struct DetailView: View {
     }
 
     /// VM order decides the colors. This Mac keeps the order it first saw them in; another Mac's comes with its history.
-    private var order: [String] { remote == nil ? model.ring.order : detail.history.vms.map(\.key) }
+    /// The Mac's own line has its own neutral ink, so it takes no place in the order.
+    private var order: [String] { (remote == nil ? model.ring.order : detail.history.vms.map(\.key)).filter { $0 != WholeMac.key } }
+
+    /// Whether the Mac's own usage is shown here, and the switch for it: this Mac's setting, or the fleet window's
+    /// choice for the Mac it shows.
+    private var usageShown: Bool { model.macUsageVisible(model.hasVMs) }
+    private func toggleUsage() {
+        if let remote { settings.fleetMacUsage[remote.uuid] = !usageShown } else { settings.macUsage = usageShown ? "hide" : "show" }
+    }
 
     private var readout: Readout? {
         let order = self.order
@@ -183,7 +192,15 @@ struct DetailView: View {
     /// moments that have no data.
     private func statusRow(_ r: Readout?) -> some View {
         HStack(alignment: .top, spacing: 24) {
-            if let h = r?.host {
+            if let h = r?.host, !model.hasVMs, let m = r?.rows.first(where: { $0.id == WholeMac.key }) {
+                // A Mac without VMs has nothing to allocate: its own CPU and memory take those places.
+                stat("Memory pressure", h.pressure.rawValue.capitalized, h.pressure == .normal ? "" : "short of memory",
+                     Explain.pressure(h), okMark: h.pressure == .normal)
+                stat("Swap used", h.swapTotal > 0 ? "\(Format.memory(h.swapUsed)) / \(Format.memory(h.swapTotal))" : "off",
+                     h.swapTotal > 0 ? "\(Int((Double(h.swapUsed) / Double(h.swapTotal) * 100).rounded()))%" : "no swap file", Explain.swap(h))
+                stat("Memory in use", m.mem, "of the Mac's RAM", nil)
+                stat("CPU busy", m.cpu, "across the Mac", m.cpuWarning)
+            } else if let h = r?.host {
                 stat("Memory pressure", h.pressure.rawValue.capitalized, h.pressure == .normal ? "" : "short of memory",
                      Explain.pressure(h), okMark: h.pressure == .normal)
                 stat("Swap used", h.swapTotal > 0 ? "\(Format.memory(h.swapUsed)) / \(Format.memory(h.swapTotal))" : "off",
@@ -240,6 +257,8 @@ struct DetailView: View {
         "Memory pressure": "macOS's own verdict on whether this Mac has enough memory. Normal: enough is free. Warning: it is compressing memory and swapping to disk to keep up, so things may feel slow. Critical: it is nearly out and stalls are likely.",
         "Swap used": "How much of this Mac's swap space on disk is in use. Memory that does not fit in RAM is moved there, and reading it back is much slower than RAM.",
         "Allocatable memory": "How much memory you could still give to another VM: this Mac's RAM, minus what macOS and your apps use, minus the memory limits of the VMs already running. \"Free now\" is what is unused at this moment.",
+        "Memory in use": "How much of this Mac's RAM is in use, as Activity Monitor counts it (app memory, wired and compressed), against the RAM it has.",
+        "CPU busy": "Cores kept busy across the whole Mac, by every process on it, against the cores it has.",
         "Cores allocated": "The CPU cores given to the running VMs, added up, against the cores this Mac has. Above the Mac's count, VMs compete for processor time when they are all busy.",
         "Network link": "How this Mac is connected to your network. For Wi-Fi, the signal strength in dBm (closer to 0 is stronger; below about -75 is weak) and the link speed.",
     ]
@@ -248,10 +267,18 @@ struct DetailView: View {
 
     private func chipsRow(_ r: Readout?) -> some View {
         HStack(spacing: 14) {
-            if let r, !r.rows.isEmpty {
+            let vms = r?.rows.filter { $0.id != WholeMac.key } ?? []
+            if model.reportsMacUsage {
+                usageChip
+                Divider().frame(height: 18)
+            }
+            if !vms.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) { ForEach(r.rows) { row in chip(row) } }.padding(1)
+                    HStack(spacing: 6) { ForEach(vms) { row in chip(row) } }.padding(1)
                 }
+            } else if r != nil, !model.hasVMs {
+                Text("No VMs on \(remote?.name ?? "this Mac")").foregroundStyle(.secondary)
+                Spacer(minLength: 0)
             } else {
                 Text(r == nil ? "" : "No VM recorded at this moment").foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -267,6 +294,25 @@ struct DetailView: View {
             .help("These periods are shaded through every track, so you can see what else changed while they lasted.")
         }
         .frame(height: 28)
+    }
+
+    /// Shows or hides the Mac's own usage: a "Whole Mac" line in the tracks, beside the VMs.
+    private var usageChip: some View {
+        let on = usageShown
+        return Button { toggleUsage() } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "desktopcomputer").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(WholeMac.name).font(.system(size: 13, weight: .semibold))
+                Text(on ? "shown" : "hidden").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10).frame(height: 26)
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.16), style: StrokeStyle(lineWidth: 1, dash: on ? [] : [3, 2])))
+            .opacity(on ? 1 : 0.7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).fixedSize()
+        .help(on ? "Hide \(remote?.name ?? "this Mac")'s own CPU, memory, disk and network" : "Show \(remote?.name ?? "this Mac")'s own CPU, memory, disk and network as a line beside the VMs")
+        .accessibilityLabel("Whole Mac usage, \(on ? "shown" : "hidden"). Click to \(on ? "hide" : "show") it.")
     }
 
     private func swatch(_ color: Color, _ label: String) -> some View {

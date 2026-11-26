@@ -30,6 +30,15 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("General") {
+                Picker(selection: $settings.macUsage) {
+                    Text("Automatic").tag("auto"); Text("Show").tag("show"); Text("Hide").tag("hide")
+                } label: {
+                    Text("This Mac's own usage")
+                    Text(settings.macUsage == "show" ? "Always shown: a \u{201C}Whole Mac\u{201D} row and line beside the VMs."
+                         : settings.macUsage == "hide" ? "Never shown. Still recorded, and alerts about this Mac still come."
+                         : "Automatic: shown while this Mac has no VMs, hidden while it has some.")
+                }
+                .pickerStyle(.segmented)
                 Toggle(isOn: Binding(get: { settings.launchAtLogin }, set: { settings.setLaunchAtLogin($0) })) {
                     Text("Launch at login")
                     Text(settings.launchAtLoginError ?? "Needed to record history while you are not watching")
