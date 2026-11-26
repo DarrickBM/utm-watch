@@ -92,6 +92,20 @@ do {
     check(MonitorEngine.placeholderBundle(path: "/x/macOS 26.utm", backend: .apple).identity == b.identity, "identity is the same before and after the config is read")
     let fallback = UTMBundles.parse(plist: [:], url: URL(fileURLWithPath: "/x/Ubuntu.utm"))
     check(fallback.name == "Ubuntu" && fallback.backend == .unknown && fallback.cpuCount == nil && !fallback.isMacOS, "empty plist falls back to folder name")
+    do {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("utmwatch-access-\(UUID().uuidString)")
+        let shut = root.appendingPathComponent("shut")
+        try? fm.createDirectory(at: shut, withIntermediateDirectories: true)
+        try? fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: shut.path)
+        check(UTMBundles.access(directory: root) == .readable, "a folder that lists is readable")
+        check(UTMBundles.access(directory: root.appendingPathComponent("absent")) == .missing, "a missing VM folder is not a refusal")
+        check(UTMBundles.access(directory: shut) == .denied, "a folder that cannot be listed is a refusal")
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shut.path)
+        try? fm.removeItem(at: root)
+    }
+    check(MonitorEngine.filesDeniedNotice.contains("Full Disk Access") && MonitorEngine.filesDeniedNotice.contains("click – to remove it"),
+          "the unreadable-files notice says where to go and how to re-add the app")
 
     let list = try? UTMScripting.parse(#"[{"id":"B390","name":"macOS 26","status":"started","backend":"apple"}]"#)
     check(list?.count == 1 && VMStatus(utmStatus: list![0].status) == .running, "UTM JSON parsed; started -> running")

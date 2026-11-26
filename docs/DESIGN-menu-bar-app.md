@@ -289,7 +289,7 @@ Verification: the same soak used for the TUI (one hour, sampled every 5 minutes)
 
 Decisions made (Darrick, 2026-11-10):
 
-1. **Signing**: install Xcode and sign with an Apple Development certificate. `make-app.sh` signs with that identity; building can stay on SwiftPM.
+1. **Signing**: install Xcode and sign with an Apple Development certificate. `make-app.sh` signs with that identity; building can stay on SwiftPM. (Superseded 2026-11-26: `make-app.sh` now prefers the self-signed "UTM Watch Release" certificate releases use, so a dev build and a release on one Mac share a signature; see DESIGN-fleet.md.)
 2. **Raw history**: keep full-resolution samples for the whole retention period, with 1-minute rollups alongside for long time frames.
 
 ## 8. Milestones

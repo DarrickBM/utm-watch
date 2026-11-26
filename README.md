@@ -114,9 +114,9 @@ xattr -dr com.apple.quarantine /Applications/UTMWatch.app
 
 **First launch.** macOS asks for three permissions: access to data from other apps (UTM's VM files), control of UTM, and the local network (pings to your router and VMs). The app keeps working if you deny one, with less detail.
 
-> [!IMPORTANT]
-> **After an update, give the permissions again.**
-> macOS treats the updated app as new. It asks for control of UTM again, and it may refuse UTM's VM files until you turn Full Disk Access for UTM Watch off and on again in System Settings › Privacy & Security, then quit UTM Watch and open it again. If it keeps refusing, use **Reset and ask again…** in UTM Watch's Settings › Permissions. Until then VMs show without their names, limits or disk usage.
+> [!NOTE]
+> **Updating from 0.9.6 or earlier? Give the permissions once more.**
+> Releases from 0.9.7 on are signed with one lasting certificate, so macOS keeps UTM Watch's permissions from one update to the next. The first update onto it is the exception: in System Settings › Privacy & Security › Full Disk Access, select UTM Watch, remove it with **–**, add it again with **+**, then quit UTM Watch and open it again; allow "Control UTM" when asked. Switching Full Disk Access off and on is not enough. Until then VMs show without their names, limits or disk usage, and the menu says so.
 
 ## What is in the box
 
@@ -207,7 +207,7 @@ Self-checks for the pure logic (Command Line Tools ship no XCTest, so this is a 
 swift run selftest
 ```
 
-`Scripts/make-app.sh` builds and signs `build/UTMWatch.app` (with your Apple Development certificate if you have one, otherwise ad hoc); `Scripts/make-release.sh` produces the downloadable archives in `dist/`. Design notes are in [docs/DESIGN-menu-bar-app.md](docs/DESIGN-menu-bar-app.md).
+`Scripts/make-app.sh` builds and signs `build/UTMWatch.app` (with the "UTM Watch Release" certificate from `Scripts/make-signing-identity.sh` if this Mac has it, else your Apple Development certificate, else ad hoc); `Scripts/make-release.sh` produces the downloadable archives in `dist/`. Design notes are in [docs/DESIGN-menu-bar-app.md](docs/DESIGN-menu-bar-app.md).
 
 ```bash
 Scripts/make-app.sh

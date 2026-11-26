@@ -27,6 +27,11 @@ public enum UTMBundles {
 
     public static var defaultDirectory: URL {
         if disabled { return URL(fileURLWithPath: "/var/empty/utmwatch-no-utm", isDirectory: true) }
+        // Testing aid: `UTMWATCH_UTM_DIR` reads VMs from another folder, such as one only Full Disk Access opens, to
+        // check that a permission survives an update on a Mac where UTM's own folder is not protected.
+        if let dir = ProcessInfo.processInfo.environment["UTMWATCH_UTM_DIR"], !dir.isEmpty {
+            return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
+        }
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Containers/com.utmapp.UTM/Data/Documents", isDirectory: true)
     }
@@ -34,6 +39,21 @@ public enum UTMBundles {
     /// Testing aid: `UTMWATCH_NO_UTM_FILES=1` behaves as if macOS refused access to UTM's folder, while UTM is still
     /// asked for its list, to exercise the settings UTM itself reports.
     public static let filesDisabled = ProcessInfo.processInfo.environment["UTMWATCH_NO_UTM_FILES"] == "1"
+
+    public enum FolderAccess: Equatable { case readable, missing, denied }
+
+    /// Whether UTM's VM folder can be listed. A missing folder is not a refusal: UTM may not be installed, or may never
+    /// have made a VM. Anything else that stops the listing is macOS withholding the privacy permission.
+    public static func access(directory: URL = defaultDirectory) -> FolderAccess {
+        if disabled { return .missing }
+        if filesDisabled { return .denied } // the test aid imitates a refusal
+        do {
+            _ = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            return .readable
+        } catch let error as NSError {
+            return error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError ? .missing : .denied
+        }
+    }
 
     public static func scan(directory: URL = defaultDirectory) -> [UTMBundle] {
         if filesDisabled { return [] }

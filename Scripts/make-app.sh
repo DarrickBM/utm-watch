@@ -1,13 +1,16 @@
 #!/bin/bash
 # Builds UTMWatch.app from the SwiftPM release build and signs it.
-# Usage: Scripts/make-app.sh            (signs with the first valid "Apple Development" identity, else ad hoc)
+# Usage: Scripts/make-app.sh            (signs with "UTM Watch Release" if present, else an "Apple Development"
+#                                        identity, else ad hoc)
 #        SIGN_IDENTITY="..." Scripts/make-app.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # OUT_DIR lets a release build go somewhere other than the copy you run day to day.
 APP="${OUT_DIR:-build}/UTMWatch.app"
-BUNDLE_ID="com.darrick.utmwatch"
+# BUNDLE_ID and APP_NAME are for test copies only (one with its own privacy permissions beside the real app).
+BUNDLE_ID="${BUNDLE_ID:-com.darrick.utmwatch}"
+APP_NAME="${APP_NAME:-UTM Watch}"
 VERSION="${VERSION:-0.9.6}"
 # The build number tells apart builds that share a version, such as successive betas: the number of commits.
 BUILD="${BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
@@ -52,8 +55,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleExecutable</key><string>UTMWatch</string>
   <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
-  <key>CFBundleName</key><string>UTM Watch</string>
-  <key>CFBundleDisplayName</key><string>UTM Watch</string>
+  <key>CFBundleName</key><string>${APP_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
@@ -68,9 +71,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')}"
+# Day-to-day builds use the release certificate when this Mac has it: macOS switches a permission off for every copy
+# of the app once a copy with another signature runs, so a dev build and a release on one Mac must be signed alike.
+IDENTITY="${SIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ] && security find-certificate -c "UTM Watch Release" >/dev/null 2>&1; then IDENTITY="UTM Watch Release"; fi
+if [ -z "$IDENTITY" ]; then IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')"; fi
 if [ -z "$IDENTITY" ]; then
-  echo "No valid Apple Development identity found: signing ad hoc (macOS will re-ask for permissions after each rebuild)."
+  echo "No signing certificate found: signing ad hoc (macOS will re-ask for permissions after each rebuild)."
   IDENTITY="-"
 fi
 # Nested executables are signed first, then the bundle.

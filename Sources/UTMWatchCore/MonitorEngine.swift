@@ -22,6 +22,14 @@ public final class MonitorEngine {
     private var pidBundle: [Int32: String] = [:]          // pid -> bundle path
     private var pidOtherApp: [Int32: String] = [:]        // pid -> app that owns a VM outside UTM
     private var bundles: [String: UTMBundle] = [:]        // bundle path -> config
+    private var filesDenied: Bool?                        // macOS refuses UTM's VM folder (no Full Disk Access); nil until checked
+
+    /// Shown while UTM's VM folder cannot be read. It says exactly what to do, including the case where the switch
+    /// already reads on: macOS can keep a permission recorded for an earlier copy, and turning the switch off and on
+    /// does not move it to this one; removing and adding the app does.
+    public static let filesDeniedNotice = "UTM Watch cannot read UTM's VM files, so VM names, sizes and disks may be missing. "
+        + "Open System Settings › Privacy & Security › Full Disk Access and turn UTM Watch on. If it is already on, "
+        + "select it, click – to remove it, click + to add it again from Applications, then reopen UTM Watch."
     private var disks: [String: DiskUsage] = [:]          // bundle path -> how full its disks are
     private var hostDisk: (free: UInt64, total: UInt64)?  // the Mac's own disk
     private var hostDiskAt: UInt64 = 0
@@ -67,11 +75,13 @@ public final class MonitorEngine {
         var bundles: [String: UTMBundle]
         var macToInterface: [String: String]
         var disks: [String: DiskUsage]
+        var filesDenied: Bool
     }
 
     /// Bundle configs and the bridge table: local file and ifconfig reads, normally well under a second.
     private func collectConfigs(extraBundlePaths: [String]) -> ConfigResult {
         var found: [String: UTMBundle] = [:]
+        let filesDenied = UTMBundles.access(directory: options.utmDirectory) == .denied
         for b in UTMBundles.scan(directory: options.utmDirectory) { found[b.url.path] = b }
         for path in extraBundlePaths where found[path] == nil {
             if let b = UTMBundles.load(url: URL(fileURLWithPath: path, isDirectory: true)) { found[path] = b }
@@ -80,11 +90,15 @@ public final class MonitorEngine {
         // A few small reads per disk image, so it rides along with the configs rather than every sample.
         var disks: [String: DiskUsage] = [:]
         for (path, b) in found { if let d = DiskImages.usage(bundle: b) { disks[path] = d } }
-        return ConfigResult(bundles: found, macToInterface: BridgeTable.read(bridges: bridges), disks: disks)
+        return ConfigResult(bundles: found, macToInterface: BridgeTable.read(bridges: bridges), disks: disks, filesDenied: filesDenied)
     }
 
     private func apply(_ r: ConfigResult) {
         bundles = r.bundles
+        if r.filesDenied != filesDenied {
+            FileLog.shared.log(r.filesDenied ? "permissions: UTM's VM folder cannot be read" : "permissions: UTM's VM folder can be read")
+        }
+        filesDenied = r.filesDenied
         // A reading that fails once (the VM was mid-write) keeps the previous one instead of blanking the figure.
         disks = disks.filter { r.bundles[$0.key] != nil }.merging(r.disks) { _, new in new }
         if !r.macToInterface.isEmpty || macToInterface.isEmpty { macToInterface = r.macToInterface }
@@ -275,6 +289,10 @@ public final class MonitorEngine {
         // 6. Notices.
         var notices: [String] = []
         if let err = utmError { notices.append(err.notice) }
+        if filesDenied == true {
+            // Typically seen after an update of an older build: macOS kept the permission for the previous copy only.
+            notices.append(Self.filesDeniedNotice)
+        }
         if !configPending.isEmpty {
             notices.append("Reading configs: \(configPending.joined(separator: ", ")) (if macOS asks to allow access to data from other apps, click Allow)")
         }

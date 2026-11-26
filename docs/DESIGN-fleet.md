@@ -104,8 +104,16 @@ Recommended key: reusable, tagged, pre-approved, not ephemeral. Tagged nodes do 
   it has no "Open Fleet", no alerts about other Macs, and no fleet tools in MCP, and the hub refuses its token for
   reading. (Whoever uses that Mac can still see that it reports, and to which address.) A view can be given to
   another Mac from the command line: `utmwatch-hub token create --enroll --view` makes a code whose Mac may view.
-- Ad-hoc signed builds make macOS ask for permissions again after each update, on every Mac.
+- Releases are signed with a self-signed certificate ("UTM Watch Release", made by `Scripts/make-signing-identity.sh`,
+  key kept outside the repository in `~/.utmwatch-signing` and the login keychain). macOS ties privacy permissions to
+  the signature's designated requirement; the ad-hoc signing used up to 0.9.6 made that the build's own hash, so each
+  update lost them. Losing the key costs every user one more re-grant; `make-release.sh` refuses any other certificate.
+  Checked on 2026-11-26 with a test copy: two certificate-signed builds installed one over the other kept Full Disk
+  Access. Launching a copy with the same bundle ID but another signature (an ad-hoc build) switched the grant off for
+  every copy, so on one Mac never run differently signed builds under the release bundle ID.
 - Testing aids: `UTMWATCH_DATA_DIR` moves the app's files; `UTMWATCH_NO_UTM=1` keeps a trial copy away from UTM;
-  `UTMWATCH_NO_UTM_FILES=1` imitates a refused files permission;
+  `UTMWATCH_NO_UTM_FILES=1` imitates a refused files permission; `UTMWATCH_UTM_DIR=<folder>` reads VMs from another
+  folder (one only Full Disk Access opens checks that the permission survives an update); `BUNDLE_ID` and `APP_NAME`
+  for `Scripts/make-app.sh` build a test copy with permissions of its own;
   `--snapshot-fleet <png>` pictures the fleet window; `--snapshot-settings <png> --snapshot-height <points>`
   pictures Settings, tall enough to show every section.
