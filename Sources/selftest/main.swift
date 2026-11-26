@@ -1098,6 +1098,32 @@ do {
     } else {
         print("skip: diskutil cannot make ASIF images here")
     }
+
+    // A hand-built ASIF image whose first disk chunk is partly written, as the VMs' own images have it: 64 KiB chunks,
+    // one table in file chunk 1, the bitmap in chunk 2, disk chunk 0 partly in file chunk 3, disk chunk 1 fully in chunk 4.
+    let chunk = 65536
+    var img = [UInt8](repeating: 0, count: 5 * chunk)
+    func put(_ v: UInt64, _ at: Int, _ bytes: Int = 8) { for i in 0..<bytes { img[at + i] = UInt8((v >> (8 * UInt64(bytes - 1 - i))) & 0xff) } }
+    img.replaceSubrange(0..<4, with: Array("shdw".utf8))
+    put(1, 4, 4); put(0x200, 8, 4); put(0x200, 0x10); put(0x1000, 0x18)
+    put(4096, 0x30); put(4096, 0x38); put(UInt64(chunk), 0x40, 4); put(512, 0x44, 2)
+    put(2, 0x200); put(1, 0x208)       // current directory: table 0 in chunk 1
+    put(1, 0x1000); put(9, 0x1008)     // older directory, ignored
+    put(0xC000_0000_0000_0003, chunk)  // disk chunk 0: partly written, in file chunk 3
+    put(0x4000_0000_0000_0004, chunk + 8) // disk chunk 1: written, in file chunk 4
+    put(2, chunk + 2048 * 8)           // the group's bitmap: chunk 2
+    img[2 * chunk] = 0b0000_0100       // sector 0 never written, sector 1 written, sectors 2 and 3 not
+    for i in 0..<chunk { img[3 * chunk + i] = 0xEE; img[4 * chunk + i] = 0x44 } // stale bytes outside sector 1 must not show
+    for i in 512..<1024 { img[3 * chunk + i] = UInt8(i & 0xff) }
+    let hand = dir.appendingPathComponent("hand.asif")
+    try? Data(img).write(to: hand)
+    let header = DiskImages.asifDiskBytes(image: hand, offset: 512, length: 92)
+    check(header == (512..<604).map { UInt8($0 & 0xff) }, "a read inside a sector of a partly written chunk returns that sector's bytes")
+    let span = DiskImages.asifDiskBytes(image: hand, offset: 500, length: 600)
+    check(span.map { Array($0[0..<12]) } == [UInt8](repeating: 0, count: 12) && span.map { Array($0[12..<524]) } == (512..<1024).map { UInt8($0 & 0xff) }
+          && span.map { Array($0[524...]) } == [UInt8](repeating: 0, count: 76), "unwritten sectors on either side read as zeros")
+    check(DiskImages.asifDiskBytes(image: hand, offset: UInt64(chunk) - 4, length: 8) == [0, 0, 0, 0, 0x44, 0x44, 0x44, 0x44],
+          "a read across into a fully written chunk")
 }
 
 print("\(checks - failures)/\(checks) checks passed")

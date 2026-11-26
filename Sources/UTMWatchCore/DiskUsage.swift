@@ -80,6 +80,16 @@ public enum DiskImages {
     }
 }
 
+extension DiskImages {
+    /// Bytes of the disk an ASIF image holds, as the guest sees them. For checking the reader.
+    public static func asifDiskBytes(image url: URL, offset: UInt64, length: Int) -> [UInt8]? {
+        var st = stat()
+        guard stat(url.path, &st) == 0, let file = FileSource(path: url.path, size: UInt64(st.st_size)) else { return nil }
+        defer { file.close() }
+        return AsifSource(file: file)?.read(offset, length)
+    }
+}
+
 // MARK: - Byte sources
 
 /// Positioned, bounded, read-only access to a run of bytes: an image file, the disk inside a qcow2 file, a partition.
@@ -285,21 +295,24 @@ final class AsifSource: ByteSource {
             return readData(physical, at, n)
         default: // partly written: the chunk-group's bitmap says which sectors hold data
             let bitmapChunk = table.be64(groupAt + Int(perGroup) * 8) & Self.indexMask
-            guard physical != 0, bitmapChunk != 0, at % block == 0, UInt64(n) % block == 0 else { return nil }
-            let firstSector = (inGroup * chunk + at) / block, count = UInt64(n) / block
-            let bytesFrom = firstSector / 4, bytesTo = (firstSector + count + 3) / 4
+            guard physical != 0, bitmapChunk != 0 else { return nil }
+            // The sectors the request touches, which need not start or end on a sector boundary (a GPT header is 92 bytes).
+            let end = at + UInt64(n)
+            let base = inGroup * (chunk / block)
+            let firstSector = base + at / block, lastSector = base + (end - 1) / block
+            let bytesFrom = firstSector / 4, bytesTo = lastSector / 4 + 1
             guard let bits = file.read(bitmapChunk &* chunk + bytesFrom, Int(bytesTo - bytesFrom)) else { return nil }
             var out = [UInt8](repeating: 0, count: n)
             var data: [UInt8]?
-            for i in 0..<count {
-                let sector = firstSector + i
+            for sector in firstSector...lastSector {
                 let state = (bits[Int(sector / 4 - bytesFrom)] >> ((sector % 4) * 2)) & 3
                 if state == 3 { return nil }
                 guard state == 1 else { continue }
                 if data == nil { data = readData(physical, at, n) }
                 guard let d = data else { return nil }
-                let from = Int(i * block)
-                out.replaceSubrange(from..<(from + Int(block)), with: d[from..<(from + Int(block))])
+                let sectorStart = (sector - base) * block
+                let from = Int(max(sectorStart, at) - at), to = Int(min(sectorStart + block, end) - at)
+                out.replaceSubrange(from..<to, with: d[from..<to])
             }
             return out
         }
